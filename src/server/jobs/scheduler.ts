@@ -6,6 +6,7 @@ import { discoverSources } from './discoverSources.js';
 import { scanSource } from './scanSource.js';
 import { researchProject } from './researchProject.js';
 import type { ProfileRow, ProjectRow, SourceRow } from '../lib/models.js';
+import { acquireLease, releaseLease, renewLease, currentLease } from './lease.js';
 
 let running = false;
 let timer: NodeJS.Timeout | null = null;
@@ -22,10 +23,23 @@ export function isTickRunning() {
  * Every step is gated on remaining budget, so a tick degrades gracefully rather
  * than failing when the cap is hit mid-pass.
  */
+/** How long a tick may hold the scheduler lease before it is considered dead. */
+const LEASE_TTL_MS = 30 * 60_000;
+
 export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
   if (running) return { skipped: 'already running' as const };
+
+  // Another container — typically the outgoing one mid-deploy — may still be
+  // working. Running concurrently would duplicate paid API calls.
+  if (!acquireLease(LEASE_TTL_MS)) {
+    const held = currentLease();
+    console.log(`[scheduler] skipping tick: another process holds the lease (${held?.holder})`);
+    return { skipped: 'locked' as const };
+  }
+
   const status = budgetStatus();
   if (status.exhausted) {
+    releaseLease();
     console.log(
       `[scheduler] skipping tick: monthly budget exhausted ($${status.monthToDateUsd} / $${status.monthlyCapUsd})`,
     );
@@ -33,6 +47,8 @@ export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
   }
 
   running = true;
+  // A long pass must not let the lease lapse and invite a second scheduler in.
+  const renewal = setInterval(() => renewLease(LEASE_TTL_MS), 60_000);
   try {
     return await withRun({ kind: 'tick', trigger, label: 'scheduled pass' }, async (ctx) => {
       const profiles = db
@@ -54,6 +70,8 @@ export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
       return { profiles: profiles.length };
     });
   } finally {
+    clearInterval(renewal);
+    releaseLease();
     running = false;
   }
 }
