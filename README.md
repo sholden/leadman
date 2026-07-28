@@ -245,17 +245,37 @@ carrying a strict JSON schema. It loops until the model submits, retrying with t
 validation errors if the output doesn't match. Every call passes through the budget
 guard first and is written to a usage ledger after.
 
-## Verification scripts
+## Tests
 
 ```bash
-npx tsx scripts/check.ts            # dedupe, geo, and cost-estimation logic
-npx tsx scripts/pipeline-check.ts   # ingest + research pipelines on fixture data
+npm test              # 130 tests, ~1s
+npm run test:watch
+npm run test:coverage
+npm run ci            # exactly what CI runs: typecheck + test + build
 ```
 
-`pipeline-check.ts` runs the real scan-ingest and research-apply code with fixture
-input and no model calls — it covers duplicate matching, blank-field filling,
-multi-source linking, fact supersession, and cascade deletes. It creates and
-removes its own fixture profile.
+The suite runs the real application code — ingest, research, budgeting, routing,
+archiving, the HTTP API — with no model calls and no network.
+
+Two properties keep it honest:
+
+- **Every test file gets a throwaway database.** `tests/setup.ts` repoints
+  `LEADMAN_DB` at a temp file before any app module is imported, so tests can
+  never read or write `data/leadman.db`.
+- **The network is stubbed globally and fails loudly.** An unstubbed `fetch`
+  throws with the URL it tried to reach, so an accidental live API call breaks the
+  build rather than the bill. `.env` is not loaded under test either, so the suite
+  behaves the same locally and in CI.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `master`:
+
+- **Test** on Node 22 and 24 — typecheck, test, build. No secrets required.
+- **Hygiene** — fails the build if `.env` or a database file gets committed, or if
+  a live-looking API key appears in the source.
+
+In-flight runs are cancelled when a PR gets a new push.
 
 ## Notes and limits
 
