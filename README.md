@@ -271,11 +271,24 @@ Two properties keep it honest:
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `master`:
 
-- **Test** on Node 22 and 24 — typecheck, test, build. No secrets required.
-- **Hygiene** — fails the build if `.env` or a database file gets committed, or if
-  a live-looking API key appears in the source.
+- **Test** — typecheck, test, build. No secrets required.
+- **Hygiene** — fails the build if `.env` or a database file gets committed, if
+  a live-looking API key appears in the source, or if the Node version drifts
+  apart between `.nvmrc`, the `Dockerfile` and `engines`.
 
 In-flight runs are cancelled when a PR gets a new push.
+
+### Node version
+
+One version everywhere — dev, CI and production — declared in **`.nvmrc`** and
+currently **26.5.0**. CI reads that file directly; the `Dockerfile` pins the same
+value so an old commit rebuilds on the runtime it originally shipped on. `nvm use`
+or `mise install` picks it up locally.
+
+Upgrading is a deliberate three-line change (`.nvmrc`, `Dockerfile`, `engines`),
+and the hygiene job fails if you miss one. Note that `better-sqlite3` compiles
+natively against Node's ABI, so a Node major bump can require a `better-sqlite3`
+bump with it — verify by running the suite on the new version before pinning it.
 
 ## Deploying
 

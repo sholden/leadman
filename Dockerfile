@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# Node 22 is the floor CI verifies; pin the minor so a deploy is reproducible.
-ARG NODE_VERSION=22.20.0
+# Keep in lockstep with .nvmrc, which CI and local shells read. The hygiene job
+# fails the build if these two drift apart. Pinned to the patch so a rebuild of
+# an old commit produces the same runtime it originally shipped on.
+ARG NODE_VERSION=26.5.0
 ARG APP_DIR=/app
 
 # ---------------------------------------------------------------- build stage
