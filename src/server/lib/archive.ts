@@ -101,7 +101,9 @@ export async function fetchReadable(url: string, maxChars = MAX_STORED_CHARS): P
       out.bytes = Buffer.byteLength(body);
       out.text = truncate(/html/i.test(out.contentType) ? htmlToText(body) : body, maxChars);
       out.title = titleFrom(body);
-      out.ok = out.text.length > 40;
+      // "ok" means we extracted readable content. A short page is still readable —
+      // only genuinely empty extraction (JS-rendered shell, error page) is not.
+      out.ok = out.text.trim().length > 0;
       return out;
     }
     const buf = Buffer.from(await res.arrayBuffer());
@@ -127,56 +129,16 @@ export async function archiveUrl(opts: {
   fallbackText?: string;
 }): Promise<string | null> {
   const { url } = opts;
-  let text = opts.fallbackText ?? '';
-  let title = opts.fallbackTitle ?? '';
-  let bytes = 0;
 
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: 'follow',
-      headers: {
-        'User-Agent': `Leadman/0.1 (${config.geocodeContact})`,
-        Accept: 'text/html,application/xhtml+xml,text/plain,*/*',
-      },
-    });
-    clearTimeout(timer);
+  // One fetch/extract implementation, shared with the `fetch_url` tool. Keeping
+  // a second copy here previously let the two drift apart.
+  const doc = await fetchReadable(url);
 
-    const contentType = res.headers.get('content-type') ?? '';
-    if (res.ok && /text\/html|text\/plain|application\/xhtml/i.test(contentType)) {
-      const body = await res.text();
-      bytes = Buffer.byteLength(body);
-      const extracted = /html/i.test(contentType) ? htmlToText(body) : body;
-      if (extracted.length > 40) {
-        text = truncate(extracted, MAX_STORED_CHARS);
-        title = title || titleFrom(body);
-      }
-    } else if (res.ok && /pdf/i.test(contentType)) {
-      // Council agendas and RFPs are overwhelmingly PDFs — extracting them is the
-      // difference between a real archive and a stored excerpt.
-      const buf = Buffer.from(await res.arrayBuffer());
-      bytes = buf.byteLength;
-      const extracted = await extractPdfText(buf);
-      if (extracted) {
-        text = truncate(extracted, MAX_STORED_CHARS);
-        title = title || opts.fallbackTitle || '';
-      } else {
-        text = text || `[PDF, ${bytes} bytes — no extractable text layer (likely a scan)]`;
-      }
-    } else if (res.ok) {
-      const buf = Buffer.from(await res.arrayBuffer());
-      bytes = buf.byteLength;
-      text =
-        text ||
-        `[binary document: ${contentType || 'unknown type'}, ${bytes} bytes — not extracted]`;
-    } else {
-      text = text || `[fetch failed: HTTP ${res.status}]`;
-    }
-  } catch (err) {
-    text = text || `[fetch failed: ${err instanceof Error ? err.message : String(err)}]`;
-  }
+  // Prefer extracted content; fall back to the excerpt the model quoted so the
+  // evidence survives even when the page does not.
+  const text = doc.ok ? doc.text : opts.fallbackText || doc.text;
+  const title = opts.fallbackTitle || doc.title;
+  const bytes = doc.bytes;
 
   if (!text) return null;
 

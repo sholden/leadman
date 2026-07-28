@@ -13,13 +13,18 @@ export const ROOT = path.resolve(here, '..', '..');
  */
 const envPath = path.join(ROOT, '.env');
 const shadowed: string[] = [];
-if (fs.existsSync(envPath)) {
+
+// Tests must not inherit the developer's real credentials or settings — otherwise
+// they pass locally and behave differently in CI, where there is no .env at all.
+const skipEnvFile = Boolean(process.env.VITEST);
+
+if (!skipEnvFile && fs.existsSync(envPath)) {
   const fromFile = dotenv.parse(fs.readFileSync(envPath));
   for (const [key, value] of Object.entries(fromFile)) {
     if (process.env[key] !== undefined && process.env[key] !== value) shadowed.push(key);
   }
 }
-dotenv.config();
+if (!skipEnvFile) dotenv.config();
 
 /** Variables where .env disagrees with an already-exported shell value. */
 export const shadowedEnvVars = shadowed;
@@ -90,6 +95,17 @@ export const MODEL_PRICING: Record<
 const warnedUnpriced = new Set<string>();
 
 /**
+ * The dearest rates in the table. Derived rather than hardcoded so that adding a
+ * pricier model automatically raises the unpriced fallback with it — a fixed
+ * figure silently stopped being "the highest" once the pro tiers were added.
+ */
+const dearestKnown = {
+  input: Math.max(...Object.values(MODEL_PRICING).map((p) => p.input)),
+  output: Math.max(...Object.values(MODEL_PRICING).map((p) => p.output)),
+  searchPerRequest: Math.max(...Object.values(MODEL_PRICING).map((p) => p.searchPerRequest ?? 0)),
+};
+
+/**
  * Price for a model. An unpriced model is deliberately costed at the most
  * expensive rate we know of rather than a cheap guess, so the budget guard errs
  * toward stopping early instead of quietly overspending on a model whose real
@@ -103,16 +119,11 @@ export function priceFor(model: string) {
     warnedUnpriced.add(model);
     console.warn(
       `[pricing] No price on file for "${model}". Costing it at the highest known rate ` +
-        `($10/$50 per MTok) so the budget cap stays conservative. Add it to MODEL_PRICING ` +
-        `in src/server/config.ts for accurate spend tracking.`,
+        `($${dearestKnown.input}/$${dearestKnown.output} per MTok) so the budget cap stays ` +
+        `conservative. Add it to MODEL_PRICING in src/server/config.ts for accurate tracking.`,
     );
   }
-  return {
-    input: 10,
-    output: 50,
-    provider: providerForModel(model),
-    searchPerRequest: 10 / 1000,
-  };
+  return { ...dearestKnown, provider: providerForModel(model) };
 }
 
 /** True when spend for this model is an assumed worst case rather than a real price. */

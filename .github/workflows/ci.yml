@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+# A new push to a PR makes the in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is what package.json supports; the ceiling catches breakage
+        # early on the version developers actually run locally.
+        node: ['22.x', '24.x']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # better-sqlite3 is a native module, so this compiles on first install.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        # No API keys: the suite stubs the network and fails loudly on any real
+        # call, so a leaked live request breaks the build rather than the bill.
+        run: npm run test -- --reporter=default --reporter=github-actions
+
+      - name: Build
+        run: npm run build
+
+  # Cheap guard against the two mistakes that actually happen in this repo.
+  hygiene:
+    name: Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No committed secrets or database
+        run: |
+          set -euo pipefail
+          fail=0
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error file=.env::.env is tracked by git — it holds API keys and must stay ignored"
+            fail=1
+          fi
+          if git ls-files | grep -qE '\.db$|\.sqlite$'; then
+            echo "::error::A database file is tracked by git; data/ should stay ignored"
+            fail=1
+          fi
+          if git grep -nE 'sk-ant-api[0-9]{2}-[A-Za-z0-9_-]{20}|sk-proj-[A-Za-z0-9_-]{20}' \
+               -- ':!*.md' ':!.github/**' >/dev/null 2>&1; then
+            echo "::error::A live-looking API key is committed in the source"
+            fail=1
+          fi
+          exit $fail
