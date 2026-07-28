@@ -136,6 +136,8 @@ export async function scanSource(
     .filter(Boolean)
     .join('\n');
 
+  ctx.step(`Scanning ${source.name}`);
+
   let result: ScanResult;
   try {
     result = await runStructured({
@@ -185,10 +187,12 @@ export async function scanSource(
     : result.notes;
   finalizeScan(scanId, source, { ...result, notes: note }, candidates.length, created, matched);
 
+  ctx.count({ sources_scanned: 1, projects_found: created });
   ctx.log(
-    `scan ${source.name}: health=${result.source_health}, ${result.projects.length} found ` +
-      `(${candidates.length} in scope${unclassified ? `, ${unclassified} off-specialization` : ''}) ` +
-      `→ ${created} new, ${matched} matched`,
+    `Scanned ${source.name}: ${result.projects.length} item(s) found, ` +
+      `${candidates.length} in scope${unclassified ? `, ${unclassified} off-specialization` : ''} ` +
+      `→ ${created} new, ${matched} already known`,
+    { sourceId: source.id, detail: result.notes },
   );
 
   return {
@@ -384,6 +388,15 @@ async function createProject(
     c.summary.slice(0, 800),
     now,
   );
+
+  ctx.result(`New lead: ${c.name}`, {
+    projectId: id,
+    sourceId: source.id,
+    workTypeId: workType?.id ?? null,
+    detail:
+      `${c.summary}\n\n${c.relevance}% fit · ${c.confidence}% confidence` +
+      `${workType ? ` · ${workType.name}` : ''}\nEvidence: ${c.evidence_url}`,
+  });
 
   return id;
 }

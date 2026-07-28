@@ -6,6 +6,7 @@ import { Sources } from './pages/Sources';
 import { Projects } from './pages/Projects';
 import { ProjectDetail } from './pages/ProjectDetail';
 import { Settings } from './pages/Settings';
+import { ActivityPage } from './pages/Activity';
 
 function useHashRoute() {
   const [hash, setHash] = React.useState(window.location.hash || '#/');
@@ -21,6 +22,7 @@ const NAV = [
   { hash: '#/', label: 'Dashboard' },
   { hash: '#/projects', label: 'Projects' },
   { hash: '#/sources', label: 'Sources' },
+  { hash: '#/activity', label: 'Activity' },
   { hash: '#/profiles', label: 'Profiles' },
   { hash: '#/settings', label: 'Settings' },
 ];
@@ -61,6 +63,7 @@ export function App() {
   else if (base === 'projects') page = <Projects profileId={profileId} />;
   else if (base === 'sources') page = <Sources profileId={profileId} profiles={profiles} />;
   else if (base === 'profiles') page = <Profiles />;
+  else if (base === 'activity') page = <ActivityPage />;
   else if (base === 'settings') page = <Settings />;
   else page = <Dashboard profileId={profileId} nav={nav} />;
 

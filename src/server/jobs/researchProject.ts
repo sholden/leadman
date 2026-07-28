@@ -91,6 +91,8 @@ export async function researchProject(
     .filter(Boolean)
     .join('\n');
 
+  ctx.step(`Researching ${project.name}`);
+
   const result = await runStructured({
     purpose: 'research_project',
     system: SYSTEM,
@@ -244,10 +246,16 @@ export async function applyResearch(
     project.id,
   );
 
-  ctx.log(
-    `research ${project.name}: ${factsAdded} fact(s), ${documentsArchived} doc(s), ` +
-      `${changedFields.length} field change(s)`,
-  );
+  ctx.count({ facts_added: factsAdded });
+  if (changed) {
+    ctx.result(
+      `${project.name}: ${factsAdded} new fact(s), ${documentsArchived} document(s) archived` +
+        (changedFields.length ? `, ${changedFields.length} field update(s)` : ''),
+      { projectId: project.id, detail: [...changedFields, ...newFactLines].join('\n') },
+    );
+  } else {
+    ctx.log(`${project.name}: nothing new found this pass`, { projectId: project.id });
+  }
 
   return { factsAdded, documentsArchived, changed };
 }

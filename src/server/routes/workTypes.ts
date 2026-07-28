@@ -131,7 +131,7 @@ workTypesRouter.post('/:id/plan', async (req, res) => {
   if (!profile) return res.status(404).json({ error: 'profile not found' });
 
   const outcome = await withRun(
-    { kind: 'assessment', profileId: profile.id, trigger: 'manual', label: `plan: ${workType.name}` },
+    { kind: 'plan', profileId: profile.id, trigger: 'manual', label: workType.name },
     (ctx) => planWorkType(ctx, profile, workType),
   );
   res.json({

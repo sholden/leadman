@@ -48,6 +48,8 @@ export async function planWorkType(
     `then call submit_plan.`,
   ].join('\n');
 
+  ctx.step(`Planning how to hunt for "${workType.name}"`);
+
   const plan = await runStructured({
     purpose: 'plan_work_type',
     system: SYSTEM,
@@ -78,6 +80,9 @@ export async function planWorkType(
     workType.id,
   );
 
-  ctx.log(`planned work type "${workType.name}": ${plan.keywords.length} keyword(s), ${plan.lead_signals.length} signal(s)`);
+  ctx.result(
+    `Strategy set for "${workType.name}": ${plan.keywords.length} keyword(s), ${plan.lead_signals.length} early signal(s)`,
+    { workTypeId: workType.id, detail: plan.source_strategy },
+  );
   return plan;
 }

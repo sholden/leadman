@@ -119,6 +119,12 @@ export async function discoverSources(
     .filter(Boolean)
     .join('\n');
 
+  ctx.step(
+    focus
+      ? `Searching the web for sources that serve "${focus.name}"`
+      : `Searching the web for lead sources near ${profile.center_label}`,
+  );
+
   const result = await runStructured({
     purpose: focus ? `discover_sources:${focus.key}` : 'discover_sources',
     system: SYSTEM,
@@ -134,12 +140,16 @@ export async function discoverSources(
   // The model is asked to verify each URL, but doesn't always. Confirm ourselves —
   // it's a plain HTTP request, so it costs nothing.
   const proposed = result.sources.map((s) => normalizeUrl(s.url));
+  ctx.step(`Link-checking ${proposed.length} proposed source(s)`);
   const checks = await checkUrls(proposed);
   const unreachable = [...checks.values()].filter(
     (c) => c.reachability === 'missing' || c.reachability === 'error',
   );
   if (unreachable.length) {
-    ctx.log(`discovery: ${unreachable.length}/${proposed.length} proposed URL(s) did not resolve`);
+    ctx.log(
+      `${unreachable.length} of ${proposed.length} proposed URL(s) did not resolve — held for approval`,
+      { detail: unreachable.map((u) => `${u.url} — ${u.note}`).join('\n') },
+    );
   }
 
   const typeByKey = new Map(allTypes.map((t) => [t.key, t]));
@@ -189,6 +199,11 @@ export async function discoverSources(
     );
     if (info.changes === 0) continue;
     added++;
+    ctx.result(`Found source: ${s.name}`, {
+      sourceId: id,
+      workTypeId: focus?.id ?? null,
+      detail: `${s.url}\nType: ${s.kind}${s.jurisdiction ? ` · ${s.jurisdiction}` : ''}\nStatus: ${status}\nWhy: ${s.reason}`,
+    });
 
     // Tag the source with the specializations it serves. If the model tagged
     // nothing but we were focusing on one type, attribute it to that type.
@@ -200,8 +215,9 @@ export async function discoverSources(
     );
   }
 
+  ctx.count({ sources_added: added });
   ctx.log(
-    `discovery${focus ? ` [${focus.key}]` : ''}: ${result.sources.length} proposed, ${added} added`,
+    `Discovery${focus ? ` for "${focus.name}"` : ''} finished: ${result.sources.length} proposed, ${added} added`,
   );
   return { added, considered: result.sources.length };
 }

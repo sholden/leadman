@@ -25,9 +25,35 @@ Open **http://localhost:8787**.
 
 For development with hot reload, `npm run dev` instead (UI on :5173, API on :8787).
 
-You need an Anthropic API key from https://console.anthropic.com/settings/keys.
-Nothing else — the maps use OpenStreetMap and the geocoder is Nominatim, neither
-of which needs a key.
+You need an API key for whichever vendor you pick — Anthropic or OpenAI (see
+**Model providers** below). Nothing else: the maps use OpenStreetMap and the
+geocoder is Nominatim, neither of which needs a key.
+
+## Model providers
+
+Leadman runs on either **Anthropic** or **OpenAI**. Choosing the model in Settings
+chooses the vendor with it — the app routes on the model id, so a mismatched
+provider setting can't silently send Claude traffic to OpenAI or vice versa.
+
+| Model | Vendor | Key |
+|---|---|---|
+| `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5` | Anthropic | `ANTHROPIC_API_KEY` |
+| `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-5-mini`, `o4-mini` | OpenAI | `OPENAI_API_KEY` |
+
+Both providers are given the same three capabilities, so every job works either
+way: web search, URL reading, and a strict schema-checked "submit" tool that
+carries the answer back.
+
+**One difference worth knowing.** Anthropic has a hosted `web_fetch` tool; OpenAI
+does not. On OpenAI, URL reading is a client-side `fetch_url` tool backed by
+Leadman's own fetcher — the same code that powers the archive, so it gets
+HTML-to-text and real PDF extraction. In practice that means OpenAI reads agenda
+PDFs just as well, but fetching happens from your machine rather than the
+vendor's, so pages that block your IP behave differently than they would on
+Anthropic. The document limits in Settings apply to both.
+
+Model pricing lives in one table in `src/server/config.ts` — update it there if
+list prices change; the budget guard and spend display both read from it.
 
 ## First run
 
@@ -116,6 +142,24 @@ you can see the project moving.
 
 **Archiving** — a text snapshot of every page a finding came from is stored
 locally, so the evidence survives the agenda getting rotated off the site.
+
+## Activity
+
+The **Activity** page answers "what is it doing, and what has it actually found?".
+
+- **Working now** — any run in progress, with the step it's on right now and its
+  events appearing live. It polls while something is running, so a 10-minute
+  discovery pass shows movement rather than a spinner.
+- **Past work** — every run with what it produced (sources found, sources scanned,
+  new leads, facts researched), how long it took, and what it cost. Expand any run
+  for its full timeline: each step timestamped, each find linked to the project or
+  source it created, with the supporting detail one click away.
+- **7-day totals** across the top.
+
+Events are written to the database as they happen rather than buffered until the
+run ends — that was the difference between being able to watch a pass and only
+seeing a wall of text afterwards. Runs left mid-flight by a restart are marked
+interrupted at boot rather than showing as active forever.
 
 ## Spending controls
 

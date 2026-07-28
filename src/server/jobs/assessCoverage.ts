@@ -94,6 +94,8 @@ export async function assessCoverage(
     `list of jurisdictions inside the radius — both are reused elsewhere in the system.`,
   ].join('\n');
 
+  ctx.step(`Reviewing coverage across ${sources.length} source(s)`);
+
   const result = await runStructured({
     purpose: 'assess_coverage',
     system: SYSTEM,
@@ -128,8 +130,10 @@ export async function assessCoverage(
     retired++;
   }
 
-  ctx.log(
-    `assessment: ${result.verdict}; ${result.coverage_gaps.length} gap(s); retired ${retired} source(s)`,
+  ctx.result(
+    `Coverage verdict: ${result.verdict.replace(/_/g, ' ')} — ${result.coverage_gaps.length} gap(s) found` +
+      (retired ? `, ${retired} source(s) retired` : ''),
+    { detail: `${result.reasoning}\n\nGaps:\n${result.coverage_gaps.map((g) => `- ${g}`).join('\n')}` },
   );
 
   // Close the loop: if the audit says we are short on sources, go find them now.
@@ -157,6 +161,12 @@ export async function assessCoverage(
       ? Math.max(3, Math.ceil(target / coverage.length))
       : target;
     const starved = leastCoveredWorkType(profile.id, perTypeTarget);
+    ctx.log(
+      starved
+        ? `Gaps found — hunting for sources to cover "${starved.name}"`
+        : 'Gaps found — hunting for more sources',
+      { workTypeId: starved?.id ?? null },
+    );
 
     await discoverSources(ctx, refreshed, {
       hints,

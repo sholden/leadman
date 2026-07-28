@@ -1,5 +1,6 @@
 import { db, getNumberSetting, getSetting, newId, nowIso } from '../db/index.js';
-import { priceFor, WEB_SEARCH_COST_PER_REQUEST } from '../config.js';
+import type { NormalizedUsage } from './providers/types.js';
+import { priceFor } from '../config.js';
 
 export class BudgetExceededError extends Error {
   constructor(
@@ -16,27 +17,14 @@ export function monthKey(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export interface UsageShape {
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  cache_read_input_tokens?: number | null;
-  cache_creation_input_tokens?: number | null;
-  server_tool_use?: { web_search_requests?: number | null } | null;
-}
-
-export function estimateCost(model: string, usage: UsageShape): number {
+export function estimateCost(model: string, usage: NormalizedUsage): number {
   const p = priceFor(model);
-  const input = usage.input_tokens ?? 0;
-  const output = usage.output_tokens ?? 0;
-  const cacheRead = usage.cache_read_input_tokens ?? 0;
-  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
-  const searches = usage.server_tool_use?.web_search_requests ?? 0;
   return (
-    (input / 1_000_000) * p.input +
-    (output / 1_000_000) * p.output +
-    (cacheRead / 1_000_000) * p.input * 0.1 +
-    (cacheWrite / 1_000_000) * p.input * 1.25 +
-    searches * WEB_SEARCH_COST_PER_REQUEST
+    (usage.inputTokens / 1_000_000) * p.input +
+    (usage.outputTokens / 1_000_000) * p.output +
+    (usage.cacheReadTokens / 1_000_000) * p.input * 0.1 +
+    (usage.cacheWriteTokens / 1_000_000) * p.input * 1.25 +
+    usage.webSearchRequests * (p.searchPerRequest ?? 0)
   );
 }
 
@@ -128,7 +116,7 @@ export class BudgetGuard {
     }
   }
 
-  record(purpose: string, model: string, usage: UsageShape): number {
+  record(purpose: string, model: string, usage: NormalizedUsage): number {
     const cost = estimateCost(model, usage);
     this.runSpend += cost;
     db.prepare(
@@ -142,11 +130,11 @@ export class BudgetGuard {
       this.runId,
       purpose,
       model,
-      usage.input_tokens ?? 0,
-      usage.output_tokens ?? 0,
-      usage.cache_read_input_tokens ?? 0,
-      usage.cache_creation_input_tokens ?? 0,
-      usage.server_tool_use?.web_search_requests ?? 0,
+      usage.inputTokens,
+      usage.outputTokens,
+      usage.cacheReadTokens,
+      usage.cacheWriteTokens,
+      usage.webSearchRequests,
       cost,
       nowIso(),
       monthKey(),

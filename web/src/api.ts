@@ -130,6 +130,22 @@ export interface Artifact {
   content_text?: string;
 }
 
+export interface RunEvent {
+  id: string;
+  run_id: string;
+  seq: number;
+  at: string;
+  level: 'info' | 'result' | 'warn' | 'error';
+  message: string;
+  detail: string;
+  source_id: string | null;
+  project_id: string | null;
+  work_type_id: string | null;
+  source_name?: string | null;
+  project_name?: string | null;
+  work_type_name?: string | null;
+}
+
 export interface Run {
   id: string;
   kind: string;
@@ -141,6 +157,28 @@ export interface Run {
   cost_usd: number;
   started_at: string;
   finished_at: string | null;
+  current_step?: string;
+  sources_added?: number;
+  sources_scanned?: number;
+  projects_found?: number;
+  facts_added?: number;
+  profile_name?: string | null;
+  event_count?: number;
+}
+
+export interface Activity {
+  active: Run[];
+  liveEvents: RunEvent[];
+  recent: Run[];
+  totals: {
+    runs: number;
+    cost: number | null;
+    sources_added: number | null;
+    sources_scanned: number | null;
+    projects_found: number | null;
+    facts_added: number | null;
+  };
+  schedulerRunning: boolean;
 }
 
 export interface Budget {
@@ -166,9 +204,10 @@ export interface Dashboard {
   schedulerEnabled: boolean;
   apiKeyConfigured: boolean;
   credentials: {
-    state: 'unchecked' | 'ok' | 'missing' | 'invalid' | 'unreachable';
+    state: 'unchecked' | 'ok' | 'missing' | 'invalid' | 'unreachable' | 'no_credit';
     detail: string;
     shadowedEnvVars: string[];
+    provider: string;
   };
 }
 
@@ -250,7 +289,20 @@ export const api = {
   saveSettings: (body: Record<string, string>) =>
     req<{ settings: Record<string, string> }>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
 
+  models: () =>
+    req<
+      {
+        provider: string;
+        configured: boolean;
+        error: string;
+        models: { id: string; priced: boolean; inputPerMTok: number; outputPerMTok: number }[];
+      }[]
+    >('/models'),
+
   budget: () => req<Budget>('/budget'),
+  activity: () => req<Activity>('/activity'),
+  runDetail: (id: string) =>
+    req<{ run: Run; usage: Record<string, unknown>[]; events: RunEvent[] }>(`/runs/${id}`),
   runs: () => req<Run[]>('/runs'),
   run: (id: string) => req<{ run: Run; usage: unknown[] }>(`/runs/${id}`),
   tick: () => req<{ status?: string; skipped?: string }>('/tick', { method: 'POST' }),

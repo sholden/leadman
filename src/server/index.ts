@@ -12,8 +12,11 @@ import { projectsRouter } from './routes/projects.js';
 import { systemRouter } from './routes/system.js';
 import { geoRouter } from './routes/geo.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
+import { reconcileOrphanedRuns } from './jobs/runs.js';
 
 migrate();
+// A run left 'running' by a crash would otherwise show as active forever.
+reconcileOrphanedRuns();
 
 const app = express();
 app.use(cors());

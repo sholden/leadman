@@ -29,6 +29,14 @@ export function migrate() {
   // SQLite cannot add a column with a REFERENCES clause to an existing table,
   // so the type is plain here; the FK exists on freshly-created databases.
   addColumnIfMissing('projects', 'work_type_id', 'TEXT');
+  // Live progress + per-run outcome counters.
+  addColumnIfMissing('runs', 'current_step', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing('runs', 'sources_added', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('runs', 'projects_found', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('runs', 'facts_added', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('runs', 'sources_scanned', 'INTEGER NOT NULL DEFAULT 0');
+
+  backfillRunCounters();
 
   const insert = db.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
@@ -37,6 +45,44 @@ export function migrate() {
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) insert.run(key, value);
   });
   seed();
+}
+
+/**
+ * Runs predating the outcome counters would otherwise show zero results forever.
+ * Both numbers are recoverable from tables that already carry run_id, so derive
+ * them once rather than leaving the activity view looking empty.
+ */
+function backfillRunCounters() {
+  const done = db.prepare("SELECT value FROM settings WHERE key = 'runCountersBackfilled2'").get() as
+    | { value: string }
+    | undefined;
+  if (done) return;
+
+  db.exec(`
+    UPDATE runs SET projects_found = (
+      SELECT COUNT(*) FROM project_updates u
+      WHERE u.run_id = runs.id AND u.kind = 'discovered'
+    ) WHERE projects_found = 0;
+
+    UPDATE runs SET sources_scanned = (
+      SELECT COUNT(*) FROM source_scans sc WHERE sc.run_id = runs.id
+    ) WHERE sources_scanned = 0;
+  `);
+
+  // Sources carry no run_id, so attribute them to the discovery run that was
+  // active when they were created. Approximate, but only used for history.
+  db.exec(`
+    UPDATE runs SET sources_added = (
+      SELECT COUNT(*) FROM sources s
+      WHERE s.origin = 'ai'
+        AND s.created_at >= runs.started_at
+        AND s.created_at <= IFNULL(runs.finished_at, runs.started_at)
+    ) WHERE kind = 'discovery' AND sources_added = 0;
+  `);
+  db.prepare("INSERT INTO settings (key, value) VALUES ('runCountersBackfilled2', ?)").run(
+    new Date().toISOString(),
+  );
+  console.log('[db] backfilled run outcome counters from existing history');
 }
 
 export function getSetting(key: SettingKey): string {

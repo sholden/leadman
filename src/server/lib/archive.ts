@@ -4,6 +4,9 @@ import { config } from '../config.js';
 
 const MAX_STORED_CHARS = 200_000;
 const FETCH_TIMEOUT_MS = 20_000;
+/** Some public sites (BoardDocs, Cloudflare-fronted portals) reject non-browser agents. */
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function htmlToText(html: string): string {
   return html
@@ -45,6 +48,70 @@ async function extractPdfText(buf: Buffer): Promise<string> {
 function titleFrom(html: string): string {
   const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return m ? htmlToText(m[1]).slice(0, 300) : '';
+}
+
+export interface ReadableDocument {
+  url: string;
+  title: string;
+  text: string;
+  bytes: number;
+  contentType: string;
+  ok: boolean;
+}
+
+/**
+ * Fetches a URL and returns readable text — HTML stripped to prose, PDFs text-
+ * extracted. Costs no model tokens.
+ *
+ * This is also what backs the `fetch_url` tool given to providers that have no
+ * hosted fetch of their own, so their document handling matches Anthropic's.
+ */
+export async function fetchReadable(url: string, maxChars = MAX_STORED_CHARS): Promise<ReadableDocument> {
+  const out: ReadableDocument = { url, title: '', text: '', bytes: 0, contentType: '', ok: false };
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': BROWSER_UA,
+        Accept: 'text/html,application/xhtml+xml,application/pdf,text/plain,*/*',
+      },
+    });
+    clearTimeout(timer);
+    out.contentType = res.headers.get('content-type') ?? '';
+
+    if (!res.ok) {
+      out.text = `[fetch failed: HTTP ${res.status}]`;
+      return out;
+    }
+    if (/pdf/i.test(out.contentType)) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      out.bytes = buf.byteLength;
+      const extracted = await extractPdfText(buf);
+      out.text = extracted
+        ? truncate(extracted, maxChars)
+        : `[PDF, ${out.bytes} bytes — no extractable text layer (likely a scan)]`;
+      out.ok = Boolean(extracted);
+      return out;
+    }
+    if (/text\/html|text\/plain|application\/xhtml|json|xml/i.test(out.contentType)) {
+      const body = await res.text();
+      out.bytes = Buffer.byteLength(body);
+      out.text = truncate(/html/i.test(out.contentType) ? htmlToText(body) : body, maxChars);
+      out.title = titleFrom(body);
+      out.ok = out.text.length > 40;
+      return out;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    out.bytes = buf.byteLength;
+    out.text = `[binary document: ${out.contentType || 'unknown type'}, ${out.bytes} bytes — not extracted]`;
+    return out;
+  } catch (err) {
+    out.text = `[fetch failed: ${err instanceof Error ? err.message : String(err)}]`;
+    return out;
+  }
 }
 
 /**

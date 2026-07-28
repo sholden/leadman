@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS runs (
   summary     TEXT NOT NULL DEFAULT '',
   error       TEXT NOT NULL DEFAULT '',
   cost_usd    REAL NOT NULL DEFAULT 0,
+  -- What the run is doing right now; cleared when it finishes.
+  current_step    TEXT NOT NULL DEFAULT '',
+  -- What it produced, for the activity view.
+  sources_added   INTEGER NOT NULL DEFAULT 0,
+  sources_scanned INTEGER NOT NULL DEFAULT 0,
+  projects_found  INTEGER NOT NULL DEFAULT 0,
+  facts_added     INTEGER NOT NULL DEFAULT 0,
   started_at  TEXT NOT NULL,
   finished_at TEXT
 );
@@ -213,6 +220,23 @@ CREATE TABLE IF NOT EXISTS project_updates (
 );
 CREATE INDEX IF NOT EXISTS idx_updates_created ON project_updates (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_updates_project ON project_updates (project_id, created_at DESC);
+
+-- Timestamped log of what a run did, written as it happens rather than at the end,
+-- so in-progress work is visible while it is still running.
+CREATE TABLE IF NOT EXISTS run_events (
+  id         TEXT PRIMARY KEY,
+  run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  seq        INTEGER NOT NULL,
+  at         TEXT NOT NULL,
+  level      TEXT NOT NULL DEFAULT 'info',  -- info|result|warn|error
+  message    TEXT NOT NULL,
+  detail     TEXT NOT NULL DEFAULT '',
+  source_id     TEXT,
+  project_id    TEXT,
+  work_type_id  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events (run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_run_events_at ON run_events (at DESC);
 
 -- Every model call, for the budget guard and the spend display.
 CREATE TABLE IF NOT EXISTS usage_ledger (

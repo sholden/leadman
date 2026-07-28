@@ -20,6 +20,9 @@ const ctx = {
   budget: { canSpend: () => false, assertCanSpend: () => {}, record: () => 0, spentUsd: 0 } as never,
   lines: [] as string[],
   log: (l: string) => ctx.lines.push(l),
+  result: (l: string) => ctx.lines.push(l),
+  step: (l: string) => ctx.lines.push(l),
+  count: () => {},
 };
 
 const now = nowIso();

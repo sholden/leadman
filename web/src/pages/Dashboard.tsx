@@ -64,11 +64,13 @@ export function Dashboard({ profileId, nav }: { profileId: string; nav: (hash: s
       {data.credentials?.state !== 'ok' && data.credentials?.state !== 'unchecked' && (
         <div className="banner danger">
           <strong>
-            {data.credentials.state === 'missing'
+            {data.credentials.state === 'no_credit'
+              ? 'Out of credit.'
+              : data.credentials.state === 'missing'
               ? 'No API key configured.'
               : data.credentials.state === 'invalid'
-                ? 'The Anthropic API key was rejected.'
-                : 'Cannot reach the Anthropic API.'}
+                ? `The ${data.credentials.provider === 'openai' ? 'OpenAI' : 'Anthropic'} API key was rejected.`
+                : `Cannot reach the ${data.credentials.provider === 'openai' ? 'OpenAI' : 'Anthropic'} API.`}
           </strong>{' '}
           {data.credentials.detail} Nothing can be discovered, scanned, or researched until this is
           fixed. Update <code>.env</code> and restart.
@@ -239,6 +241,9 @@ export function Dashboard({ profileId, nav }: { profileId: string; nav: (hash: s
             </table>
           )}
           <div style={{ marginTop: 10 }}>
+            <button className="small" onClick={() => nav('#/activity')}>
+              See all activity
+            </button>
             <button className="small" onClick={() => nav('#/settings')}>
               Budget &amp; settings
             </button>

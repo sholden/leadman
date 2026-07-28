@@ -25,8 +25,14 @@ const box = boundingBox(30.4515, -91.1871, 60);
 console.log(`${box.north > box.south && box.east > box.west ? 'PASS' : 'FAIL'}  bounding box well-formed`);
 
 // Cost estimation drives the hard caps, so it needs to be right.
-const cost = estimateCost('claude-opus-5', {
-  input_tokens: 1_000_000, output_tokens: 1_000_000,
-  server_tool_use: { web_search_requests: 100 },
+const usage = (over: Partial<Parameters<typeof estimateCost>[1]> = {}) => ({
+  inputTokens: 1_000_000, outputTokens: 1_000_000,
+  cacheReadTokens: 0, cacheWriteTokens: 0, webSearchRequests: 0, ...over,
 });
-console.log(`${Math.abs(cost - 31) < 0.001 ? 'PASS' : 'FAIL'}  1M in + 1M out + 100 searches = $${cost.toFixed(2)} (expect $31.00)`);
+const anth = estimateCost('claude-opus-5', usage({ webSearchRequests: 100 }));
+console.log(`${Math.abs(anth - 31) < 0.001 ? 'PASS' : 'FAIL'}  anthropic: 1M in + 1M out + 100 searches = $${anth.toFixed(2)} (expect $31.00)`);
+const oai = estimateCost('gpt-5.1', usage());
+console.log(`${Math.abs(oai - 11.25) < 0.001 ? 'PASS' : 'FAIL'}  openai:    1M in + 1M out = $${oai.toFixed(2)} (expect $11.25)`);
+// Cached input must price at 0.1x on either vendor.
+const cached = estimateCost('gpt-5.1', usage({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 }));
+console.log(`${Math.abs(cached - 0.125) < 0.001 ? 'PASS' : 'FAIL'}  cached input priced at 0.1x = $${cached.toFixed(3)} (expect $0.125)`);

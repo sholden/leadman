@@ -6,6 +6,8 @@ import { runTick, isTickRunning } from '../jobs/scheduler.js';
 import { config } from '../config.js';
 import { DEFAULT_SETTINGS } from '../config.js';
 import { credentialStatus } from '../ai/credentials.js';
+import { allProviders } from '../ai/client.js';
+import { isPriced, priceFor } from '../config.js';
 
 export const systemRouter = Router();
 
@@ -88,6 +90,41 @@ systemRouter.get('/dashboard', (req, res) => {
   });
 });
 
+/**
+ * Models this installation can actually use, queried from each account rather
+ * than hardcoded — a stale list is how you end up offering a model that 404s or
+ * hiding one the account already has.
+ */
+systemRouter.get('/models', async (_req, res) => {
+  const out: Record<string, unknown>[] = [];
+  for (const provider of allProviders()) {
+    if (!provider.hasApiKey()) {
+      out.push({ provider: provider.id, configured: false, models: [], error: '' });
+      continue;
+    }
+    try {
+      const models = await provider.availableModels();
+      out.push({
+        provider: provider.id,
+        configured: true,
+        error: '',
+        models: models.map((id) => {
+          const p = priceFor(id);
+          return { id, priced: isPriced(id), inputPerMTok: p.input, outputPerMTok: p.output };
+        }),
+      });
+    } catch (err) {
+      out.push({
+        provider: provider.id,
+        configured: true,
+        models: [],
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  res.json(out);
+});
+
 systemRouter.get('/settings', (_req, res) => {
   res.json({ settings: allSettings(), defaults: DEFAULT_SETTINGS });
 });
@@ -102,6 +139,44 @@ systemRouter.put('/settings', (req, res) => {
   res.json({ settings: allSettings() });
 });
 
+/** Active and recent work, for the Activity view. */
+systemRouter.get('/activity', (req, res) => {
+  const limit = Math.min(200, Number(req.query.limit ?? 40));
+  const runSelect = `
+    SELECT r.*, p.name AS profile_name,
+           (SELECT COUNT(*) FROM run_events e WHERE e.run_id = r.id) AS event_count
+    FROM runs r LEFT JOIN profiles p ON p.id = r.profile_id`;
+
+  const active = db
+    .prepare(`${runSelect} WHERE r.status = 'running' ORDER BY r.started_at`)
+    .all();
+
+  // The last few events of each in-progress run, so the view shows live movement.
+  const liveEvents = active.length
+    ? db
+        .prepare(
+          `SELECT * FROM run_events WHERE run_id IN (${active.map(() => '?').join(',')})
+           ORDER BY run_id, seq`,
+        )
+        .all(...active.map((r) => (r as { id: string }).id))
+    : [];
+
+  const recent = db
+    .prepare(`${runSelect} WHERE r.status != 'running' ORDER BY r.started_at DESC LIMIT ?`)
+    .all(limit);
+
+  const totals = db
+    .prepare(
+      `SELECT COUNT(*) AS runs, ROUND(SUM(cost_usd), 4) AS cost,
+              SUM(sources_added) AS sources_added, SUM(sources_scanned) AS sources_scanned,
+              SUM(projects_found) AS projects_found, SUM(facts_added) AS facts_added
+       FROM runs WHERE started_at >= datetime('now', '-7 days')`,
+    )
+    .get();
+
+  res.json({ active, liveEvents, recent, totals, schedulerRunning: isTickRunning() });
+});
+
 systemRouter.get('/runs', (_req, res) => {
   res.json(db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT 100').all());
 });
@@ -112,7 +187,17 @@ systemRouter.get('/runs/:id', (req, res) => {
   const usage = db
     .prepare('SELECT * FROM usage_ledger WHERE run_id = ? ORDER BY created_at')
     .all(req.params.id);
-  res.json({ run, usage });
+  const events = db
+    .prepare(
+      `SELECT e.*, s.name AS source_name, pr.name AS project_name, wt.name AS work_type_name
+       FROM run_events e
+       LEFT JOIN sources s ON s.id = e.source_id
+       LEFT JOIN projects pr ON pr.id = e.project_id
+       LEFT JOIN work_types wt ON wt.id = e.work_type_id
+       WHERE e.run_id = ? ORDER BY e.seq`,
+    )
+    .all(req.params.id);
+  res.json({ run, usage, events });
 });
 
 systemRouter.get('/budget', (_req, res) => {

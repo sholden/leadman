@@ -59,7 +59,7 @@ export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
 }
 
 async function processProfile(ctx: RunContext, profile: ProfileRow) {
-  ctx.log(`--- profile: ${profile.name}`);
+  ctx.log(`Working on profile: ${profile.name}`);
 
   // 1. Coverage assessment
   const assessIntervalHours = getNumberSetting('assessIntervalHours');
@@ -76,7 +76,7 @@ async function processProfile(ctx: RunContext, profile: ProfileRow) {
   try {
     if (sourceCount === 0 && !profile.last_assessed_at) {
       // Cold start: go straight to discovery so the first tick produces something.
-      ctx.log('cold start — discovering initial sources');
+      ctx.log('First pass for this profile — finding initial sources');
       await discoverSources(ctx, profile, { limit: 14 });
       db.prepare('UPDATE profiles SET last_assessed_at = ?, updated_at = ? WHERE id = ?').run(
         nowIso(),

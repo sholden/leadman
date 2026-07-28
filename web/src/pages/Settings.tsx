@@ -76,13 +76,6 @@ const FIELDS: {
     type: 'number',
   },
   {
-    key: 'model',
-    label: 'Model',
-    hint: 'Opus 5 is the most capable and is the right default for this kind of research.',
-    type: 'select',
-    options: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
-  },
-  {
     key: 'effort',
     label: 'Reasoning effort',
     hint: 'Higher effort digs deeper per source and costs more tokens.',
@@ -94,6 +87,7 @@ const FIELDS: {
 export function Settings() {
   const settings = useAsync(() => api.settings(), []);
   const budget = useAsync<Budget>(() => api.budget(), []);
+  const models = useAsync(() => api.models(), []);
   const [form, setForm] = React.useState<Record<string, string> | null>(null);
   const [saved, setSaved] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -183,6 +177,49 @@ export function Settings() {
           </p>
         </div>
       )}
+
+      <div className="card">
+        <h2>Model</h2>
+        <p className="tiny muted" style={{ marginTop: -6 }}>
+          Queried live from your accounts, so this is what you can actually use. Picking a
+          model picks its vendor too. Restart after changing so the key is re-verified.
+        </p>
+        {models.error && <ErrorNote error={models.error} />}
+        <div className="field">
+          <label htmlFor="model-select">Model</label>
+          <select
+            id="model-select"
+            name="model"
+            value={form.model ?? ''}
+            onChange={(e) => setForm({ ...form, model: e.target.value })}
+          >
+            {(models.data ?? []).map((p) =>
+              p.models.length === 0 ? null : (
+                <optgroup key={p.provider} label={p.provider === 'openai' ? 'OpenAI' : 'Anthropic'}>
+                  {p.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id} — ${m.inputPerMTok}/${m.outputPerMTok} per MTok
+                      {m.priced ? '' : ' (price unknown)'}
+                    </option>
+                  ))}
+                </optgroup>
+              ),
+            )}
+            {/* Keep the saved value selectable even if that account is no longer configured. */}
+            {!(models.data ?? []).some((p) => p.models.some((m) => m.id === form.model)) && (
+              <option value={form.model}>{form.model} (not available on a configured key)</option>
+            )}
+          </select>
+        </div>
+        {(models.data ?? [])
+          .filter((p) => !p.configured || p.error)
+          .map((p) => (
+            <div className="tiny muted" key={p.provider}>
+              {p.provider === 'openai' ? 'OpenAI' : 'Anthropic'}:{' '}
+              {p.error ? p.error : `no ${p.provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'} set — its models are hidden`}
+            </div>
+          ))}
+      </div>
 
       <div className="card">
         <h2>Configuration</h2>
