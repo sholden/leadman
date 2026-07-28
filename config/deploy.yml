@@ -61,8 +61,15 @@ builder:
   # The deploy host is x86; building on an Apple Silicon laptop needs this.
   arch: amd64
   cache:
-    type: gha
-    options: mode=max
+    # Registry rather than `gha`: the GitHub Actions cache only exists inside a
+    # workflow run, so it did nothing for deploys from a laptop, and its service
+    # returning an error page failed an otherwise good build. A cache tag in the
+    # image's own repository works from both, and inherits its visibility.
+    type: registry
+    image: sholden/leadman:build-cache
+    # A layer cache is an optimisation. If the registry rejects the export, the
+    # build should still ship — never fail a deploy over a cache write.
+    options: mode=max,ignore-error=true
 
 aliases:
   logs: app logs -f
