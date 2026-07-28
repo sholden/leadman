@@ -280,7 +280,42 @@ In-flight runs are cancelled when a PR gets a new push.
 ## Deploying
 
 Deployed with [Kamal](https://kamal-deploy.org) to a single host. Config lives in
-`config/deploy.yml`; secrets are read from your shell via `.kamal/secrets`.
+`config/deploy.yml`; secrets are read from the environment via `.kamal/secrets`.
+
+### Automatically, on merge to master
+
+`.github/workflows/deploy.yml` deploys production. It is triggered by the **CI**
+workflow finishing, not by the push itself, and it refuses to run unless CI
+concluded `success` on a `push` to `master` — so a merge whose tests fail never
+reaches the host. It deploys the exact commit CI tested, then checks
+`https://leadgen.ingsh.it/api/health` from outside to confirm public DNS and the
+certificate are healthy. `workflow_dispatch` runs it manually.
+
+Deploys queue rather than cancel each other: interrupting a rolling cutover leaves
+the host half-replaced and Kamal's lock held.
+
+Four repository secrets make it work:
+
+| Secret | What it is |
+| --- | --- |
+| `KAMAL_REGISTRY_PASSWORD` | Docker Hub access token |
+| `KAMAL_SSH_PRIVATE_KEY` | Private half of a deploy key authorized as `root` on the host |
+| `ANTHROPIC_API_KEY` | Passed into the container |
+| `OPENAI_API_KEY` | Passed into the container |
+
+`KAMAL_SSH_PRIVATE_KEY` is deliberately a **dedicated** key rather than a personal
+one, so CI's access to the host can be revoked on its own. To rotate it:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C 'leadman-github-actions-deploy' -f ~/.ssh/leadman_deploy_key
+ssh-copy-id -i ~/.ssh/leadman_deploy_key root@sshconnection.com
+gh secret set KAMAL_SSH_PRIVATE_KEY < ~/.ssh/leadman_deploy_key
+# then drop the old entry from the host's ~/.ssh/authorized_keys
+```
+
+### By hand
+
+Still supported, and the only option for `kamal setup`, `rollback`, or debugging.
 
 **Prerequisites** — Kamal (`gem install kamal`), Docker running locally, SSH access
 to the host as root, and DNS for `leadgen.ingsh.it` pointing at it.

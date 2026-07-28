@@ -1,0 +1,134 @@
+name: Deploy
+
+# Fires only after the CI workflow finishes. Gating on `workflow_run` rather
+# than on `push` means a merge to master cannot reach production unless the
+# tests, typecheck, build and hygiene checks all passed on that exact commit.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+# A deploy is a rolling container replacement; interrupting one leaves the host
+# half-cut-over and Kamal's lock held. Queue instead of cancelling.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to leadgen.ingsh.it
+    runs-on: ubuntu-latest
+
+    # Three conditions, and all of them matter:
+    #   conclusion  — CI actually passed, not just finished
+    #   head_branch — the run was on master, not a PR branch
+    #   event       — a push to master, not a pull_request run targeting it
+    # A manual dispatch bypasses these by design; it is already branch-scoped.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master' &&
+       github.event.workflow_run.event == 'push')
+
+    environment:
+      name: production
+      url: https://leadgen.ingsh.it
+
+    steps:
+      # Deploy the commit CI tested, not whatever master happens to be now.
+      # Full history: Kamal builds from a local `git clone` of this checkout and
+      # tags the image with the commit SHA, so a shallow clone confuses both.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      # Pinned: an unattended deploy should not change deployment tooling on its
+      # own. Bump deliberately, in step with the version used locally.
+      - name: Install Kamal
+        run: gem install kamal -v 2.11.0 --no-document
+
+      # Kamal's default builder is the buildx `docker-container` driver, which
+      # is what makes the layer cache in config/deploy.yml usable at all.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # `cache: type: gha` needs credentials that GitHub exposes to JavaScript
+      # actions but not to `run:` steps. Re-export them so the buildx call Kamal
+      # makes can reach the Actions cache; without this the build still works,
+      # it just recompiles better-sqlite3 and reinstalls npm every time.
+      - name: Expose the Actions cache to buildx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const name of ['ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_URL', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[name]) core.exportVariable(name, process.env[name]);
+            }
+
+      # Kamal drives the host over SSH. This key is scoped to this repository:
+      # it is not the maintainer's personal key, and revoking it from the host's
+      # authorized_keys disables CI deploys without affecting anything else.
+      - name: Authorize SSH to the deploy host
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.KAMAL_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_PRIVATE_KEY}" ]; then
+            echo "::error::KAMAL_SSH_PRIVATE_KEY is not set — add it with 'gh secret set KAMAL_SSH_PRIVATE_KEY < <keyfile>'"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Kamal uses net-ssh, which verifies host keys and fails on an unknown
+          # host rather than prompting. Pin what the host presents right now.
+          ssh-keyscan -t rsa,ecdsa,ed25519 sshconnection.com >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
+          # Passed through to the container by config/deploy.yml. Only the one
+          # matching the model selected in Settings is actually used, but both
+          # ship so switching providers does not need a redeploy.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: kamal deploy
+
+      # A cancelled or crashed run can leave the deploy lock held on the host,
+      # which blocks every later deploy with "Deploy lock already in place".
+      - name: Release the deploy lock
+        if: failure() || cancelled()
+        continue-on-error: true
+        env:
+          KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: kamal lock release
+
+      # Kamal's proxy healthcheck already gated the cutover from inside the
+      # host. This checks the part that healthcheck cannot see: public DNS and
+      # the Let's Encrypt certificate.
+      - name: Verify the public endpoint
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS --max-time 15 https://leadgen.ingsh.it/api/health; then
+              echo
+              echo "Deployed commit ${{ github.event.workflow_run.head_sha || github.sha }}"
+              exit 0
+            fi
+            echo "attempt ${attempt} failed; retrying in 10s"
+            sleep 10
+          done
+          echo "::error::Deployed, but https://leadgen.ingsh.it/api/health is not responding"
+          exit 1
