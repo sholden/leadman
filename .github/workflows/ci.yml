@@ -95,17 +95,22 @@ jobs:
           set -euo pipefail
           nvmrc=$(tr -d '[:space:]' < .nvmrc)
           docker=$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile | tr -d '[:space:]')
+          mise=$(sed -n 's/^node *= *"\(.*\)"/\1/p' mise.toml | tr -d '[:space:]')
           engines=$(node -p "require('./package.json').engines.node")
           fail=0
           if [ "$nvmrc" != "$docker" ]; then
             echo "::error file=Dockerfile::Dockerfile pins Node $docker but .nvmrc says $nvmrc"
             fail=1
           fi
+          if [ "$nvmrc" != "$mise" ]; then
+            echo "::error file=mise.toml::mise.toml pins Node $mise but .nvmrc says $nvmrc"
+            fail=1
+          fi
           if [ ">=${nvmrc%%.*}" != "$engines" ]; then
             echo "::error file=package.json::engines.node is '$engines' but .nvmrc says $nvmrc (expected '>=${nvmrc%%.*}')"
             fail=1
           fi
-          [ $fail -eq 0 ] && echo "Node $nvmrc — .nvmrc, Dockerfile and engines agree"
+          [ $fail -eq 0 ] && echo "Node $nvmrc — .nvmrc, Dockerfile, mise.toml and engines agree"
           exit $fail
 
       - name: No committed secrets or database

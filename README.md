@@ -280,13 +280,18 @@ In-flight runs are cancelled when a PR gets a new push.
 
 ### Node version
 
-One version everywhere — dev, CI and production — declared in **`.nvmrc`** and
-currently **26.5.0**. CI reads that file directly; the `Dockerfile` pins the same
-value so an old commit rebuilds on the runtime it originally shipped on. `nvm use`
-or `mise install` picks it up locally.
+One version everywhere — dev, CI and production — currently **26.5.0**. CI reads
+`.nvmrc` directly, the `Dockerfile` pins the same value so an old commit rebuilds
+on the runtime it originally shipped on, and `mise.toml` pins it for local shells.
 
-Upgrading is a deliberate three-line change (`.nvmrc`, `Dockerfile`, `engines`),
-and the hygiene job fails if you miss one. Note that `better-sqlite3` compiles
+`mise.toml` exists because mise does not read `.nvmrc` unless you opt in
+(`idiomatic_version_file_enable_tools`), and that setting is global — it would
+change how mise behaves in every other repository on the machine. A committed
+`mise.toml` keeps the pin local to this project. `nvm` users get it from
+`.nvmrc` as usual. Run `mise install` after cloning.
+
+Upgrading is a deliberate four-line change (`.nvmrc`, `Dockerfile`, `mise.toml`,
+`engines`), and the hygiene job fails if you miss one. Note that `better-sqlite3` compiles
 natively against Node's ABI, so a Node major bump can require a `better-sqlite3`
 bump with it — verify by running the suite on the new version before pinning it.
 
