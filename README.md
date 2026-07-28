@@ -277,6 +277,103 @@ Two properties keep it honest:
 
 In-flight runs are cancelled when a PR gets a new push.
 
+## Deploying
+
+Deployed with [Kamal](https://kamal-deploy.org) to a single host. Config lives in
+`config/deploy.yml`; secrets are read from the environment via `.kamal/secrets`.
+
+### Automatically, on merge to master
+
+`.github/workflows/deploy.yml` deploys production. It is triggered by the **CI**
+workflow finishing, not by the push itself, and it refuses to run unless CI
+concluded `success` on a `push` to `master` — so a merge whose tests fail never
+reaches the host. It deploys the exact commit CI tested, then checks
+`https://leadgen.ingsh.it/api/health` from outside to confirm public DNS and the
+certificate are healthy. `workflow_dispatch` runs it manually.
+
+Deploys queue rather than cancel each other: interrupting a rolling cutover leaves
+the host half-replaced and Kamal's lock held.
+
+Four repository secrets make it work:
+
+| Secret | What it is |
+| --- | --- |
+| `KAMAL_REGISTRY_PASSWORD` | Docker Hub access token |
+| `KAMAL_SSH_PRIVATE_KEY` | Private half of a deploy key authorized as `root` on the host |
+| `ANTHROPIC_API_KEY` | Passed into the container |
+| `OPENAI_API_KEY` | Passed into the container |
+
+`KAMAL_SSH_PRIVATE_KEY` is deliberately a **dedicated** key rather than a personal
+one, so CI's access to the host can be revoked on its own. To rotate it:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C 'leadman-github-actions-deploy' -f ~/.ssh/leadman_deploy_key
+ssh-copy-id -i ~/.ssh/leadman_deploy_key root@sshconnection.com
+gh secret set KAMAL_SSH_PRIVATE_KEY < ~/.ssh/leadman_deploy_key
+# then drop the old entry from the host's ~/.ssh/authorized_keys
+```
+
+### By hand
+
+Still supported, and the only option for `kamal setup`, `rollback`, or debugging.
+
+**Prerequisites** — Kamal (`gem install kamal`), Docker running locally, SSH access
+to the host as root, and DNS for `leadgen.ingsh.it` pointing at it.
+
+```bash
+export KAMAL_REGISTRY_PASSWORD=...   # Docker Hub access token, not your password
+export ANTHROPIC_API_KEY=...         # and/or OPENAI_API_KEY
+
+kamal setup     # first time: installs Docker + the proxy on the host, then deploys
+kamal deploy    # every time after
+```
+
+Useful once it is up:
+
+```bash
+kamal logs      # tail
+kamal shell     # a shell in the running container
+kamal db        # sqlite3 against the live database
+kamal spend     # month-by-month API spend
+kamal rollback  # previous image
+```
+
+### What persists
+
+Everything worth keeping — the database, archived documents, the spend ledger —
+lives in the `leadman_data` volume mounted at `/data`. The container is
+disposable; **the volume is not**. Losing it loses every lead ever found, so back
+it up:
+
+```bash
+ssh root@sshconnection.com \
+  "docker run --rm -v leadman_data:/data -v /root:/backup alpine \
+   tar czf /backup/leadman-$(date +%F).tar.gz -C /data ."
+```
+
+### Why one instance
+
+Two things pin this to a single container: state is a SQLite file on a local
+volume, and the scheduler runs in-process spending real money on every pass. A
+second host would keep its own divergent database and double the bill.
+
+A rolling deploy still briefly overlaps the outgoing and incoming containers on
+the same volume, so before any scheduled work the app takes a **database-backed
+lease** and the loser skips its tick (`src/server/jobs/lease.ts`). That prevents
+duplicate paid runs during cutover. It is not clustering — if this ever needs to
+scale, the database has to move out of SQLite first.
+
+### The image
+
+Multi-stage: the build stage compiles `better-sqlite3` natively and builds the
+front end, then dev dependencies are pruned before copying into a slim runtime.
+Runs as the unprivileged `node` user. ~349 MB.
+
+The server runs TypeScript directly through `tsx` rather than emitting JavaScript.
+That keeps `schema.sql` resolving next to its module and avoids a separate build
+config, at the cost of shipping `src/` and a little startup time — a fair trade at
+this size, but the reason `tsx` is a runtime dependency rather than a dev one.
+
 ## Notes and limits
 
 - **Verify before you act on a lead.** Findings carry a confidence score and a

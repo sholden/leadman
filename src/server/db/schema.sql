@@ -3,6 +3,15 @@
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
+-- Single-holder leases over background work. Exists because a rolling deploy
+-- briefly runs two containers against this same database file.
+CREATE TABLE IF NOT EXISTS leases (
+  key         TEXT PRIMARY KEY,
+  holder      TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  expires_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

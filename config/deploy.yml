@@ -1,0 +1,88 @@
+# Kamal deployment for Leadman.
+#
+# Read this before changing anything: Leadman keeps all of its state in one
+# SQLite file on a mounted volume, and runs its scheduler inside the web process.
+# That makes it a deliberately single-instance application. Adding a second host
+# or replica would give you two schedulers competing for one database — see the
+# "Why one instance" note at the bottom.
+
+service: leadman
+
+image: sholden/leadman
+
+servers:
+  web:
+    - sshconnection.com
+
+# Kamal's proxy terminates TLS and gets a certificate from Let's Encrypt.
+proxy:
+  ssl: true
+  host: leadgen.ingsh.it
+  app_port: 8787
+  healthcheck:
+    path: /api/health
+    # The app migrates the database and verifies its API key on boot; give it
+    # room to do that before the proxy decides the container is unhealthy.
+    interval: 5
+    timeout: 60
+
+registry:
+  username: sholde4@gmail.com
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+env:
+  secret:
+    # Only the one matching the configured model is required, but both are
+    # listed so switching providers in Settings does not need a redeploy.
+    - ANTHROPIC_API_KEY
+    - OPENAI_API_KEY
+  clear:
+    NODE_ENV: production
+    PORT: 8787
+
+    # Lives on the mounted volume below, NOT inside the container filesystem.
+    LEADMAN_DB: /data/leadman.db
+
+    # Background discovery, scanning and research. Set to "off" to deploy a
+    # read-only instance that spends nothing.
+    LEADMAN_SCHEDULER: "on"
+
+    # Sent as the User-Agent when fetching pages and geocoding; OpenStreetMap's
+    # usage policy asks for something that identifies the operator.
+    LEADMAN_CONTACT: leadgen.ingsh.it
+
+# Everything worth keeping lives here: the database, the archived documents, the
+# spend ledger. Losing this volume loses every lead ever found, so back it up.
+volumes:
+  - "leadman_data:/data"
+
+builder:
+  # The deploy host is x86; building on an Apple Silicon laptop needs this.
+  arch: amd64
+  cache:
+    type: gha
+    options: mode=max
+
+aliases:
+  logs: app logs -f
+  shell: app exec --interactive --reuse "bash"
+  # Inspect production data without leaving the host.
+  db: app exec --interactive --reuse "sqlite3 /data/leadman.db"
+  # What has it spent, by month?
+  spend: app exec --reuse "sqlite3 /data/leadman.db 'SELECT month_key, ROUND(SUM(cost_usd),2) AS usd, COUNT(*) AS calls FROM usage_ledger GROUP BY month_key'"
+
+# --- Why one instance -------------------------------------------------------
+#
+# Two things pin this to a single container:
+#
+#   1. State is a SQLite file on a local volume. A second host would have its
+#      own volume and its own, divergent, set of leads.
+#   2. The scheduler runs in-process and spends real money on every pass.
+#
+# A rolling deploy still briefly overlaps the outgoing and incoming containers.
+# They share the volume, so the app takes a database-backed lease before running
+# any scheduled work and the loser skips its tick — see src/server/jobs/lease.ts.
+# That protects against duplicate paid runs during the cutover, but it is not a
+# substitute for real clustering. If this ever needs to scale, the database has
+# to move out first.
