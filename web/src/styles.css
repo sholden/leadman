@@ -219,6 +219,7 @@ tr:last-child td { border-bottom: none; }
 .banner.warn { background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .banner.danger { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .banner.info { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.banner.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; }
 .tabs button {
@@ -250,4 +251,33 @@ pre.archive {
   .sidebar { width: auto; flex: none; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); }
   .nav { flex-direction: row; flex-wrap: wrap; }
   .main { padding: 20px 16px 60px; }
+}
+
+/* ---------- auth screens ---------- */
+
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 26px 24px;
+}
+
+.auth-card input { width: 100%; }
+
+/* Signed-in identity, pinned to the bottom of the sidebar. */
+.who {
+  border-top: 1px solid var(--border);
+  padding: 12px 8px 0;
 }

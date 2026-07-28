@@ -349,12 +349,13 @@ async function createProject(
   const now = nowIso();
   db.prepare(
     `INSERT INTO projects
-       (id, profile_id, work_type_id, name, match_key, status, summary, project_type, stage, address,
+       (id, account_id, profile_id, work_type_id, name, match_key, status, summary, project_type, stage, address,
         jurisdiction, owner_org, estimated_value, timeline_note, relevance, confidence,
         first_seen_at, last_updated_at)
-     VALUES (?, ?, ?, ?, ?, 'discovered', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    ctx.accountId,
     profile.id,
     workType?.id ?? null,
     c.name.slice(0, 300),

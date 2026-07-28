@@ -1,5 +1,6 @@
-import { db, getNumberSetting, nowIso } from '../db/index.js';
-import { budgetStatus, BudgetExceededError } from '../ai/budget.js';
+import { db, getNumberSetting, getSiteNumberSetting, nowIso } from '../db/index.js';
+import { budgetStatus, BudgetExceededError, installationMonthToDateSpend } from '../ai/budget.js';
+import { runInAccount } from '../lib/context.js';
 import { withRun, type RunContext } from './runs.js';
 import { assessCoverage } from './assessCoverage.js';
 import { discoverSources } from './discoverSources.js';
@@ -26,7 +27,18 @@ export function isTickRunning() {
 /** How long a tick may hold the scheduler lease before it is considered dead. */
 const LEASE_TTL_MS = 30 * 60_000;
 
-export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
+/**
+ * One scheduler pass.
+ *
+ * Each account is worked separately, inside its own scope and against its own
+ * budget, so one tenant exhausting its cap does not stop the others and no run
+ * ever spans two accounts. Pass `onlyAccountId` to work a single tenant, which
+ * is what a manual tick from the UI does.
+ */
+export async function runTick(
+  trigger: 'schedule' | 'manual' = 'schedule',
+  onlyAccountId?: string,
+) {
   if (running) return { skipped: 'already running' as const };
 
   // Another container — typically the outgoing one mid-deploy — may still be
@@ -37,23 +49,64 @@ export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
     return { skipped: 'locked' as const };
   }
 
-  const status = budgetStatus();
-  if (status.exhausted) {
+  // The installation ceiling is checked once up front: it bounds every account
+  // at once, so there is no point starting any of them.
+  const globalCap = getSiteNumberSetting('globalMonthlyBudgetUsd');
+  const globalSpent = installationMonthToDateSpend();
+  if (globalSpent >= globalCap) {
     releaseLease();
     console.log(
-      `[scheduler] skipping tick: monthly budget exhausted ($${status.monthToDateUsd} / $${status.monthlyCapUsd})`,
+      `[scheduler] skipping tick: installation budget exhausted ($${globalSpent.toFixed(2)} / $${globalCap.toFixed(2)})`,
     );
     return { skipped: 'budget' as const };
+  }
+
+  const accounts = (
+    onlyAccountId
+      ? db.prepare('SELECT id, name FROM accounts WHERE id = ? AND active = 1').all(onlyAccountId)
+      : db.prepare('SELECT id, name FROM accounts WHERE active = 1 ORDER BY created_at').all()
+  ) as { id: string; name: string }[];
+
+  if (accounts.length === 0) {
+    releaseLease();
+    return { skipped: 'no accounts' as const };
   }
 
   running = true;
   // A long pass must not let the lease lapse and invite a second scheduler in.
   const renewal = setInterval(() => renewLease(LEASE_TTL_MS), 60_000);
   try {
-    return await withRun({ kind: 'tick', trigger, label: 'scheduled pass' }, async (ctx) => {
+    const outcomes = [];
+    for (const account of accounts) {
+      if (installationMonthToDateSpend() >= globalCap) {
+        console.log('[scheduler] installation budget reached; stopping this tick');
+        break;
+      }
+      outcomes.push(await runTickForAccount(account, trigger));
+    }
+    return { accounts: outcomes.length, outcomes };
+  } finally {
+    clearInterval(renewal);
+    releaseLease();
+    running = false;
+  }
+}
+
+async function runTickForAccount(account: { id: string; name: string }, trigger: 'schedule' | 'manual') {
+  return runInAccount(account.id, async () => {
+    const status = budgetStatus(account.id);
+    if (status.exhausted) {
+      console.log(
+        `[scheduler] skipping ${account.name}: monthly budget exhausted ` +
+          `($${status.monthToDateUsd} / $${status.monthlyCapUsd})`,
+      );
+      return { accountId: account.id, skipped: 'budget' as const };
+    }
+
+    return withRun({ kind: 'tick', trigger, label: 'scheduled pass' }, async (ctx) => {
       const profiles = db
-        .prepare('SELECT * FROM profiles WHERE active = 1 ORDER BY created_at')
-        .all() as ProfileRow[];
+        .prepare('SELECT * FROM profiles WHERE account_id = ? AND active = 1 ORDER BY created_at')
+        .all(account.id) as ProfileRow[];
 
       if (profiles.length === 0) {
         ctx.log('no active profiles; nothing to do');
@@ -69,11 +122,7 @@ export async function runTick(trigger: 'schedule' | 'manual' = 'schedule') {
       }
       return { profiles: profiles.length };
     });
-  } finally {
-    clearInterval(renewal);
-    releaseLease();
-    running = false;
-  }
+  });
 }
 
 async function processProfile(ctx: RunContext, profile: ProfileRow) {

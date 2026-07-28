@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, migrate } from '../src/server/db/index.js';
 import { archiveUrl, fetchReadable } from '../src/server/lib/archive.js';
-import { resetData } from './helpers.js';
+import { resetData, useAccount } from './helpers.js';
 
 migrate();
+useAccount();
 
 function stubResponse(body: BodyInit | null, contentType: string, status = 200) {
   vi.stubGlobal(

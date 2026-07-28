@@ -39,6 +39,23 @@ export const config = {
   geocodeContact: process.env.LEADMAN_CONTACT ?? 'leadman-local-app',
   /** Set LEADMAN_SCHEDULER=off to boot the UI without any background AI work. */
   schedulerEnabled: (process.env.LEADMAN_SCHEDULER ?? 'on') !== 'off',
+
+  /**
+   * First site admin, seeded on boot when no site admin exists yet. There is no
+   * public signup, so without this an upgraded installation has no way in.
+   */
+  bootstrapAdminEmail: process.env.LEADMAN_ADMIN_EMAIL ?? '',
+  bootstrapAdminPassword: process.env.LEADMAN_ADMIN_PASSWORD ?? '',
+  /** Name given to the account that adopts pre-tenancy data on upgrade. */
+  bootstrapAccountName: process.env.LEADMAN_ACCOUNT_NAME ?? 'Leadman',
+
+  /** How long a login lasts before it must be repeated. */
+  sessionTtlDays: Number(process.env.LEADMAN_SESSION_TTL_DAYS ?? 30),
+  /**
+   * Session cookies are marked Secure unless this is explicitly off, so a
+   * proxied HTTPS deployment is the default and plain-HTTP local dev is opt-in.
+   */
+  secureCookies: (process.env.LEADMAN_SECURE_COOKIES ?? (process.env.NODE_ENV === 'production' ? 'on' : 'off')) !== 'off',
 } as const;
 
 /**
@@ -172,3 +189,18 @@ export const DEFAULT_SETTINGS = {
 } as const;
 
 export type SettingKey = keyof typeof DEFAULT_SETTINGS;
+
+/**
+ * Installation-wide configuration, editable only by a site admin.
+ *
+ * The per-account monthly cap above bounds one tenant. It cannot bound the
+ * operator: ten accounts each staying under $40 is still a $400 invoice, and
+ * every account bills to the same provider API key. This is the ceiling that
+ * actually protects whoever owns that key.
+ */
+export const DEFAULT_SITE_SETTINGS = {
+  /** Hard ceiling on estimated spend across every account, per calendar month. */
+  globalMonthlyBudgetUsd: '200',
+} as const;
+
+export type SiteSettingKey = keyof typeof DEFAULT_SITE_SETTINGS;

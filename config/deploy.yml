@@ -37,6 +37,11 @@ env:
     # listed so switching providers in Settings does not need a redeploy.
     - ANTHROPIC_API_KEY
     - OPENAI_API_KEY
+    # Creates the first site administrator on the first boot after this deploy.
+    # Without them the upgraded instance has data but nobody who can sign in.
+    # Ignored once an administrator exists, so they are safe to leave in place.
+    - LEADMAN_ADMIN_EMAIL
+    - LEADMAN_ADMIN_PASSWORD
   clear:
     NODE_ENV: production
     PORT: 8787
@@ -51,6 +56,10 @@ env:
     # Sent as the User-Agent when fetching pages and geocoding; OpenStreetMap's
     # usage policy asks for something that identifies the operator.
     LEADMAN_CONTACT: leadgen.ingsh.it
+
+    # Names the account that adopts the data created before accounts existed.
+    # Only used on the one boot that performs that migration.
+    LEADMAN_ACCOUNT_NAME: Holden Architecture
 
 # Everything worth keeping lives here: the database, the archived documents, the
 # spend ledger. Losing this volume loses every lead ever found, so back it up.

@@ -1,4 +1,5 @@
 import { db, newId, nowIso } from '../db/index.js';
+import { currentAccountId } from './context.js';
 import { sha256, truncate } from './text.js';
 import { config } from '../config.js';
 
@@ -142,21 +143,26 @@ export async function archiveUrl(opts: {
 
   if (!text) return null;
 
+  const accountId = currentAccountId();
   const hash = sha256(`${url}\n${text}`);
+  // Scoped to the account: two tenants archiving the same public agenda each
+  // keep their own copy, and neither is ever handed the other's artifact id.
   const dupe = db
     .prepare(
-      "SELECT id FROM artifacts WHERE content_hash = ? AND url = ? AND IFNULL(project_id, '') = ?",
+      `SELECT id FROM artifacts
+       WHERE account_id = ? AND content_hash = ? AND url = ? AND IFNULL(project_id, '') = ?`,
     )
-    .get(hash, url, opts.projectId ?? '') as { id: string } | undefined;
+    .get(accountId, hash, url, opts.projectId ?? '') as { id: string } | undefined;
   if (dupe) return dupe.id;
 
   const id = newId();
   db.prepare(
     `INSERT INTO artifacts
-       (id, project_id, project_source_id, source_id, url, title, content_text, content_hash, byte_size, fetched_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, account_id, project_id, project_source_id, source_id, url, title, content_text, content_hash, byte_size, fetched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    accountId,
     opts.projectId ?? null,
     opts.projectSourceId ?? null,
     opts.sourceId ?? null,

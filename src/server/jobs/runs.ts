@@ -1,6 +1,7 @@
 import { db, newId, nowIso } from '../db/index.js';
 import { BudgetGuard, BudgetExceededError } from '../ai/budget.js';
-import { reportRuntimeFailure } from '../ai/credentials.js';
+import { providerForAccount, reportRuntimeFailure } from '../ai/credentials.js';
+import { currentAccountId } from '../lib/context.js';
 
 export type RunKind = 'tick' | 'discovery' | 'assessment' | 'scan' | 'research' | 'plan';
 
@@ -13,6 +14,8 @@ export interface EventRefs {
 
 export interface RunContext {
   runId: string;
+  /** The tenant this run belongs to. Every row it writes carries this. */
+  accountId: string;
   budget: BudgetGuard;
   /** Append a timestamped line to the run's timeline. Written immediately. */
   log: (message: string, refs?: EventRefs) => void;
@@ -36,12 +39,22 @@ export function startRun(opts: {
   profileId?: string | null;
   trigger?: 'schedule' | 'manual';
   label?: string;
+  accountId?: string;
 }): RunContext {
   const runId = newId();
+  const accountId = opts.accountId ?? currentAccountId();
   db.prepare(
-    `INSERT INTO runs (id, profile_id, kind, trigger, status, label, started_at)
-     VALUES (?, ?, ?, ?, 'running', ?, ?)`,
-  ).run(runId, opts.profileId ?? null, opts.kind, opts.trigger ?? 'schedule', opts.label ?? '', nowIso());
+    `INSERT INTO runs (id, account_id, profile_id, kind, trigger, status, label, started_at)
+     VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`,
+  ).run(
+    runId,
+    accountId,
+    opts.profileId ?? null,
+    opts.kind,
+    opts.trigger ?? 'schedule',
+    opts.label ?? '',
+    nowIso(),
+  );
 
   const lines: string[] = [];
   let seq = 0;
@@ -69,7 +82,8 @@ export function startRun(opts: {
 
   return {
     runId,
-    budget: new BudgetGuard(runId),
+    accountId,
+    budget: new BudgetGuard(runId, accountId),
     lines,
     log: (message, refs) => emit('info', message, refs),
     result: (message, refs) => emit('result', message, refs),
@@ -111,14 +125,17 @@ export async function withRun<T>(
     const message = err instanceof Error ? err.message : String(err);
     // Surface billing/auth failures on the dashboard rather than burying them in
     // a run log — they block everything and only the user can fix them.
-    reportRuntimeFailure(err);
+    reportRuntimeFailure(err, providerForAccount(ctx.accountId));
     ctx.log(`error: ${message}`);
     finishRun(ctx, 'error', message);
     return { runId: ctx.runId, result: null, status: 'error', error: message };
   }
 }
 
-/** Clears runs left 'running' by a crash or restart, so the view isn't misleading. */
+/**
+ * Clears runs left 'running' by a crash or restart, so the view isn't misleading.
+ * Installation-wide by design: it runs at boot, before any account is in scope.
+ */
 export function reconcileOrphanedRuns() {
   const orphans = db
     .prepare("SELECT id FROM runs WHERE status = 'running'")

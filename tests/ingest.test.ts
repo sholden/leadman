@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, migrate, setSetting } from '../src/server/db/index.js';
 import { ingestCandidates } from '../src/server/jobs/scanSource.js';
 import type { ProjectRow, WorkTypeRow } from '../src/server/lib/models.js';
-import { candidate, fakeCtx, makeProfile, makeSource, makeWorkType, resetData } from './helpers.js';
+import { candidate, fakeCtx, makeProfile, makeSource, makeWorkType, resetData, useAccount } from './helpers.js';
 
 migrate();
+useAccount();
 
 // Archiving does a real HTTP fetch; tests must not. Stub it to a no-op.
 vi.mock('../src/server/lib/archive.js', () => ({

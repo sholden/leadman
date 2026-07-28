@@ -19,6 +19,9 @@ const hydrate = (t: WorkTypeRow) => ({
 workTypesRouter.get('/', (req, res) => {
   const profileId = String(req.query.profileId ?? '');
   if (!profileId) return res.status(400).json({ error: 'profileId is required' });
+  if (!ownsProfile(profileId, req.auth!.accountId)) {
+    return res.status(404).json({ error: 'profile not found' });
+  }
 
   const coverage = coverageByWorkType(profileId);
   const rows = allWorkTypes(profileId);
@@ -45,8 +48,9 @@ workTypesRouter.post('/', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const t = parsed.data;
 
-  const profile = db.prepare('SELECT id FROM profiles WHERE id = ?').get(t.profile_id);
-  if (!profile) return res.status(404).json({ error: 'profile not found' });
+  if (!ownsProfile(t.profile_id, req.auth!.accountId)) {
+    return res.status(404).json({ error: 'profile not found' });
+  }
 
   const order = (
     db
@@ -57,10 +61,11 @@ workTypesRouter.post('/', (req, res) => {
   const id = newId();
   const now = nowIso();
   db.prepare(
-    `INSERT INTO work_types (id, profile_id, key, name, description, active, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO work_types (id, account_id, profile_id, key, name, description, active, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    req.auth!.accountId,
     t.profile_id,
     uniqueWorkTypeKey(t.profile_id, t.name),
     t.name,
@@ -83,9 +88,7 @@ const patchInput = z.object({
 workTypesRouter.patch('/:id', (req, res) => {
   const parsed = patchInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const existing = db.prepare('SELECT * FROM work_types WHERE id = ?').get(req.params.id) as
-    | WorkTypeRow
-    | undefined;
+  const existing = findWorkType(req.params.id, req.auth!.accountId);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const p = parsed.data;
 
@@ -115,15 +118,16 @@ workTypesRouter.patch('/:id', (req, res) => {
 });
 
 workTypesRouter.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM work_types WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM work_types WHERE id = ? AND account_id = ?').run(
+    req.params.id,
+    req.auth!.accountId,
+  );
   res.status(204).end();
 });
 
 /** Work out where this kind of work surfaces. Cheap — no web tools. */
 workTypesRouter.post('/:id/plan', async (req, res) => {
-  const workType = db.prepare('SELECT * FROM work_types WHERE id = ?').get(req.params.id) as
-    | WorkTypeRow
-    | undefined;
+  const workType = findWorkType(req.params.id, req.auth!.accountId);
   if (!workType) return res.status(404).json({ error: 'not found' });
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(workType.profile_id) as
     | ProfileRow
@@ -142,9 +146,7 @@ workTypesRouter.post('/:id/plan', async (req, res) => {
 
 /** Hunt for sources serving this work type specifically. */
 workTypesRouter.post('/:id/discover', async (req, res) => {
-  const workType = db.prepare('SELECT * FROM work_types WHERE id = ?').get(req.params.id) as
-    | WorkTypeRow
-    | undefined;
+  const workType = findWorkType(req.params.id, req.auth!.accountId);
   if (!workType) return res.status(404).json({ error: 'not found' });
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(workType.profile_id) as
     | ProfileRow
@@ -170,3 +172,15 @@ workTypesRouter.post('/:id/discover', async (req, res) => {
   );
   res.json(outcome);
 });
+
+const ownsProfile = (profileId: string, accountId: string) =>
+  Boolean(
+    db.prepare('SELECT 1 FROM profiles WHERE id = ? AND account_id = ?').get(profileId, accountId),
+  );
+
+/** Scoped lookup, so another tenant's id is indistinguishable from a missing one. */
+function findWorkType(id: string, accountId: string): WorkTypeRow | undefined {
+  return db
+    .prepare('SELECT * FROM work_types WHERE id = ? AND account_id = ?')
+    .get(id, accountId) as WorkTypeRow | undefined;
+}

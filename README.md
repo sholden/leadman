@@ -17,17 +17,90 @@ Everything runs on your own machine. Data lives in a single SQLite file.
 
 ```bash
 npm install
-cp .env.example .env      # then put your Anthropic API key in it
+cp .env.example .env      # API key, plus the first administrator's email/password
 npm start                 # builds the UI and starts the server
 ```
 
-Open **http://localhost:8787**.
+Open **http://localhost:8787** and sign in with the `LEADMAN_ADMIN_EMAIL` and
+`LEADMAN_ADMIN_PASSWORD` you put in `.env`. See **Accounts and sign-in** below.
 
 For development with hot reload, `npm run dev` instead (UI on :5173, API on :8787).
 
 You need an API key for whichever vendor you pick — Anthropic or OpenAI (see
 **Model providers** below). Nothing else: the maps use OpenStreetMap and the
 geocoder is Nominatim, neither of which needs a key.
+
+## Accounts and sign-in
+
+Everything in Leadman belongs to an **account** — a firm. Profiles, sources,
+projects, archived documents, settings and spend are all scoped to one, and no
+request in the app reads tenant data without knowing which account it is for.
+
+**People are global; membership is a join.** A user is one email address with one
+password, and belongs to any number of accounts. That way signing in is
+unambiguous — no account picker on the login screen — and the same address can
+work for two firms without colliding. If you belong to more than one, a switcher
+appears above the profile selector.
+
+**Two roles inside an account:**
+
+| Role | Can |
+|---|---|
+| Owner | Everything a member can, plus invite people, change roles, and remove members |
+| Member | See and work with the account's profiles, sources and projects |
+
+An account's last owner cannot be demoted or removed, so an account can never be
+left with nobody able to administer it.
+
+**One role above accounts.** A *site administrator* operates the installation:
+they can see every account, create new ones, disable users, and set the
+installation-wide budget ceiling. Entering an account they are not a member of is
+allowed but recorded — see the access log under **Administration**. It is a flag
+on a normal user, not a separate login.
+
+### Getting people in
+
+There is no public signup. Accounts are created by a site administrator; people
+join an existing account by invite.
+
+Leadman sends no email, so an invite is a **link you copy and deliver yourself**.
+It is bound to one address, expires after 14 days, and works once. Only a hash of
+the token is stored, which is why the link is shown exactly once when you create
+it — if you lose it, revoke the invite and issue another.
+
+Redeeming a link does one of two things. A new address is asked to choose a
+password. An address that already has a Leadman login is asked for that existing
+password, and the account is added to the user they already are.
+
+### The first administrator
+
+On first boot, if no site administrator exists, `LEADMAN_ADMIN_EMAIL` and
+`LEADMAN_ADMIN_PASSWORD` create one. They are ignored once one exists — rotating
+them will not reset a password, so change it from **People → Change my password**
+instead. An installation with no administrator says so on the login screen rather
+than silently rejecting every attempt.
+
+### Upgrading an existing database
+
+The first boot after this change migrates in place: it creates one account, moves
+every existing profile, source, project, run, artifact and ledger entry into it,
+and carries your configured model and budgets across. `LEADMAN_ACCOUNT_NAME`
+names that account. The administrator seeded above becomes its owner. Nothing is
+lost and nothing is left unowned.
+
+### How it is implemented
+
+Sessions are opaque random tokens in an `httpOnly` cookie, stored only as hashes,
+so a database leak cannot be replayed as a live session. Passwords use Node's
+built-in `scrypt` — no dependency added — with a 10-character minimum
+(`MIN_PASSWORD_LENGTH` in `src/server/lib/password.ts`). Changing a password
+revokes every other session for that user.
+
+The active account is carried through the request in an `AsyncLocalStorage` scope
+rather than threaded through every function signature, because the deepest
+readers of account settings are in the provider layer. Reading account-scoped
+data with no scope established **throws** rather than defaulting, so a missing
+scope fails loudly instead of quietly serving one tenant's data to another.
 
 ## Model providers
 
@@ -163,10 +236,20 @@ interrupted at boot rather than showing as active forever.
 
 ## Spending controls
 
-Two hard caps, both in **Settings**:
+Three hard caps. The first two are per-account, in **Settings**:
 
 - **Per-run budget** (default $4) — one scheduled pass or one manual action.
-- **Monthly budget** (default $40) — calendar month, all activity.
+- **Monthly budget** (default $40) — calendar month, all of that account's activity.
+
+The third is installation-wide, in **Administration**, and only a site
+administrator can see or change it:
+
+- **Installation monthly ceiling** (default $200) — every account, combined.
+
+That third one exists because per-account caps cannot bound the operator: every
+account bills to the same provider API key, so ten accounts each staying under
+$40 is still a $400 invoice. Accounts see *that* the installation ceiling stopped
+their work, but not the aggregate figures behind it.
 
 The check runs *before* every model call. Because one agentic turn reading a dozen
 PDF agendas can cost several dollars on its own, each call is additionally given a
@@ -231,11 +314,12 @@ To browse without spending anything, set `LEADMAN_SCHEDULER=off` in `.env`.
 ```
 src/server/
   ai/          model client, strict output schemas, budget guard
+  auth/        password hashing, sessions, memberships, invites, scoping middleware
   jobs/        discoverSources · assessCoverage · scanSource · researchProject · scheduler
   routes/      REST API
-  lib/         geo math, text/dedupe helpers, page archiver
+  lib/         geo math, text/dedupe helpers, page archiver, account scope
   db/          SQLite schema + migration
-web/src/       React UI (dashboard, profiles + map, sources, projects, settings)
+web/src/       React UI (login, dashboard, profiles + map, sources, projects, people, admin)
 scripts/       verification scripts (see below)
 ```
 
@@ -312,7 +396,7 @@ certificate are healthy. `workflow_dispatch` runs it manually.
 Deploys queue rather than cancel each other: interrupting a rolling cutover leaves
 the host half-replaced and Kamal's lock held.
 
-Four repository secrets make it work:
+Repository secrets make it work:
 
 | Secret | What it is |
 | --- | --- |
@@ -320,6 +404,13 @@ Four repository secrets make it work:
 | `KAMAL_SSH_PRIVATE_KEY` | Private half of a deploy key authorized as `root` on the host |
 | `ANTHROPIC_API_KEY` | Passed into the container |
 | `OPENAI_API_KEY` | Passed into the container |
+| `LEADMAN_ADMIN_EMAIL` | Creates the first site administrator on first boot |
+| `LEADMAN_ADMIN_PASSWORD` | Creates the first site administrator on first boot |
+
+> **Deploying this change for the first time:** set the two `LEADMAN_ADMIN_*`
+> secrets *before* deploying. The boot that adds accounts also creates the
+> administrator from them; without them the instance comes up with all its data
+> intact and no way to sign in, and you would have to redeploy to fix it.
 
 `KAMAL_SSH_PRIVATE_KEY` is deliberately a **dedicated** key rather than a personal
 one, so CI's access to the host can be revoked on its own. To rotate it:
@@ -406,5 +497,14 @@ this size, but the reason `tsx` is a runtime dependency rather than a dev one.
   approval queue instead of being scanned.
 - Contact research is limited to professional contact details an organization has
   published itself.
-- Nothing is exposed to the network — the server binds locally and there is no
-  authentication. Don't put it on a public interface as-is.
+- **Sign-in is required for everything except the health endpoint.** Sessions are
+  hashed tokens in httpOnly cookies and passwords are scrypt-hashed, but this has
+  not been through a security review. There is no rate limiting on the login
+  endpoint, no two-factor, and no password reset flow — a forgotten password
+  needs a site administrator, and a forgotten *administrator* password needs
+  database access.
+- Account isolation is enforced in the API, not by the database. Every route
+  filters on the active account and every write stamps it, with tests covering
+  the boundary — but a future route that forgets to do so would leak across
+  accounts. Reading account-scoped settings without a scope throws, which catches
+  the common case, not every case.
