@@ -83,6 +83,7 @@ export function migrate() {
   const legacySettings = reshapeSettingsTable();
   adoptOrphanedData();
   if (legacySettings) applyLegacySettings(legacySettings);
+  relocateSchedulerInterval();
 
   const insert = db.prepare(
     'INSERT INTO site_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
@@ -227,6 +228,43 @@ function applyLegacySettings(legacy: { key: string; value: string }[]) {
     }
   })();
   console.log(`[db] moved ${legacy.length} setting(s) to per-account storage`);
+}
+
+/**
+ * Moves `tickIntervalMinutes` from per-account settings to installation-wide.
+ *
+ * There is one scheduler loop in the process, so a per-account cadence has no
+ * single value it could take — and `startScheduler()` asking for one with no
+ * account in scope crashed the server at boot. Handles databases already
+ * upgraded by the first version of this migration, where the key is sitting in
+ * `settings`.
+ *
+ * Takes the value from the oldest account, which on any real installation is
+ * the operator's own, rather than inventing a number they never chose.
+ */
+function relocateSchedulerInterval() {
+  const alreadySiteWide = db
+    .prepare("SELECT 1 FROM site_settings WHERE key = 'tickIntervalMinutes'")
+    .get();
+  const perAccount = db
+    .prepare(
+      `SELECT s.value FROM settings s
+       JOIN accounts a ON a.id = s.account_id
+       WHERE s.key = 'tickIntervalMinutes'
+       ORDER BY a.created_at LIMIT 1`,
+    )
+    .get() as { value: string } | undefined;
+
+  if (!alreadySiteWide && perAccount) {
+    db.prepare("INSERT INTO site_settings (key, value) VALUES ('tickIntervalMinutes', ?)").run(
+      perAccount.value,
+    );
+    console.log(`[db] moved tickIntervalMinutes (${perAccount.value}) to installation settings`);
+  }
+  const removed = db.prepare("DELETE FROM settings WHERE key = 'tickIntervalMinutes'").run();
+  if (removed.changes > 0) {
+    console.log(`[db] removed ${removed.changes} per-account copy of tickIntervalMinutes`);
+  }
 }
 
 /**

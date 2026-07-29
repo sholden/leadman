@@ -22,12 +22,6 @@ const FIELDS: {
     type: 'number',
   },
   {
-    key: 'tickIntervalMinutes',
-    label: 'Minutes between passes',
-    hint: 'How often the background scheduler wakes up. Takes effect on restart.',
-    type: 'number',
-  },
-  {
     key: 'assessIntervalHours',
     label: 'Hours between coverage reviews',
     hint: 'How often the system asks itself whether it has enough sources, and goes finding more if not.',

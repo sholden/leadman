@@ -165,8 +165,6 @@ export const DEFAULT_SETTINGS = {
   monthlyBudgetUsd: '40',
   /** Hard ceiling on estimated spend for a single scheduler tick or manual run. */
   perRunBudgetUsd: '4',
-  /** Minutes between scheduler ticks. */
-  tickIntervalMinutes: '30',
   /** Hours between coverage assessments per profile. */
   assessIntervalHours: '72',
   /** Max sources scanned in one tick. */
@@ -201,6 +199,12 @@ export type SettingKey = keyof typeof DEFAULT_SETTINGS;
 export const DEFAULT_SITE_SETTINGS = {
   /** Hard ceiling on estimated spend across every account, per calendar month. */
   globalMonthlyBudgetUsd: '200',
+  /**
+   * Minutes between scheduler passes. Installation-wide because there is one
+   * scheduler loop in the process: a per-account cadence has no single value it
+   * could take, and asking for one crashed the server at boot.
+   */
+  tickIntervalMinutes: '30',
 } as const;
 
 export type SiteSettingKey = keyof typeof DEFAULT_SITE_SETTINGS;
