@@ -218,7 +218,7 @@ async function processProfile(ctx: RunContext, profile: ProfileRow) {
 }
 
 export function startScheduler() {
-  const minutes = getNumberSetting('tickIntervalMinutes');
+  const minutes = getSiteNumberSetting('tickIntervalMinutes');
   const ms = Math.max(5, minutes) * 60_000;
   console.log(`[scheduler] running every ${minutes} minute(s)`);
 

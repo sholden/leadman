@@ -166,8 +166,12 @@ function SiteBudget({
   onSave: (v: Record<string, string>) => void;
 }) {
   const [cap, setCap] = React.useState('');
+  const [tick, setTick] = React.useState('');
   React.useEffect(() => {
-    if (site.data) setCap(site.data.settings.globalMonthlyBudgetUsd);
+    if (site.data) {
+      setCap(site.data.settings.globalMonthlyBudgetUsd);
+      setTick(site.data.settings.tickIntervalMinutes);
+    }
   }, [site.data]);
 
   if (!site.data) return null;
@@ -201,8 +205,30 @@ function SiteBudget({
             />
           )}
         </Field>
+        <Field
+          label="Minutes between passes"
+          className="field shrink"
+          hint="One scheduler serves every account, so this is installation-wide. Takes effect on restart."
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="number"
+              min="5"
+              step="1"
+              value={tick}
+              onChange={(e) => setTick(e.target.value)}
+            />
+          )}
+        </Field>
         <div className="shrink">
-          <button onClick={() => onSave({ globalMonthlyBudgetUsd: cap })}>Save</button>
+          <button
+            onClick={() =>
+              onSave({ globalMonthlyBudgetUsd: cap, tickIntervalMinutes: tick })
+            }
+          >
+            Save
+          </button>
         </div>
       </div>
     </div>

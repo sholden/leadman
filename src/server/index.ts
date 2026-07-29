@@ -41,8 +41,23 @@ const server = app.listen(config.port, async () => {
     console.log('');
   }
 
-  if (config.schedulerEnabled) startScheduler();
-  else console.log('  Scheduler disabled (LEADMAN_SCHEDULER=off)\n');
+  // Background work must not be able to take the site down with it. This runs
+  // inside the listen callback, where an uncaught throw becomes an unhandled
+  // rejection and kills the process — which is exactly how a scheduler bug
+  // turned into a 502 on a server that was otherwise serving fine.
+  if (config.schedulerEnabled) {
+    try {
+      startScheduler();
+    } catch (err) {
+      console.error(
+        '  ERROR: the scheduler failed to start, so no background discovery, scanning\n' +
+          '  or research will run. The app is still serving; existing data is unaffected.\n',
+        err,
+      );
+    }
+  } else {
+    console.log('  Scheduler disabled (LEADMAN_SCHEDULER=off)\n');
+  }
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
