@@ -1,7 +1,7 @@
 import request from 'supertest';
 import type { Express } from 'express';
 import { db, newId, nowIso, createAccount } from '../src/server/db/index.js';
-import { enterAccountScope } from '../src/server/lib/context.js';
+import { setAmbientAccount } from '../src/server/lib/context.js';
 import { addMembership, createUser, type Role } from '../src/server/auth/store.js';
 import type { RunContext } from '../src/server/jobs/runs.js';
 import type { ProfileRow, SourceRow, WorkTypeRow } from '../src/server/lib/models.js';
@@ -22,9 +22,12 @@ export function primaryAccountId(): string {
  *
  * Account-scoped reads throw without one, by design — call this once after
  * `migrate()` in any test that touches settings, budgets, or jobs.
+ *
+ * API tests still exercise real scoping: `requireAuth` establishes a proper
+ * per-request scope, which takes precedence over this fallback.
  */
 export function useAccount(accountId = primaryAccountId()): string {
-  enterAccountScope(accountId);
+  setAmbientAccount(accountId);
   return accountId;
 }
 

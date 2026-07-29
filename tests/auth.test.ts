@@ -57,6 +57,39 @@ describe('password hashing', () => {
   });
 });
 
+describe('account scope', () => {
+  it('refuses an account-scoped read with no scope at all', async () => {
+    const { setAmbientAccount, currentAccountId } = await import('../src/server/lib/context.js');
+    setAmbientAccount(null);
+    try {
+      expect(() => currentAccountId()).toThrow(/No account scope is active/);
+    } finally {
+      setAmbientAccount(primaryAccountId());
+    }
+  });
+
+  it('prefers a real request scope over the test fallback', async () => {
+    const { runInAccount, currentAccountId } = await import('../src/server/lib/context.js');
+    const other = makeAccount('Scope Check');
+    // If the fallback ever won over an explicit scope, every request would read
+    // whichever account happened to be installed process-wide.
+    expect(runInAccount(other, () => currentAccountId())).toBe(other);
+    expect(currentAccountId()).toBe(primaryAccountId());
+  });
+
+  it('propagates a scope across await boundaries', async () => {
+    const { runInAccount, currentAccountId } = await import('../src/server/lib/context.js');
+    const other = makeAccount('Async Check');
+    // Regression guard: an earlier version used AsyncLocalStorage.enterWith(),
+    // whose store did not survive into callbacks scheduled later on Node 26.
+    const seen = await runInAccount(other, async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      return currentAccountId();
+    });
+    expect(seen).toBe(other);
+  });
+});
+
 describe('login', () => {
   it('sets an httpOnly session cookie on success', async () => {
     await makeUser({ email: 'owner@example.test' });

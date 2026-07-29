@@ -38,14 +38,27 @@ export function currentScope(): RequestScope | undefined {
 }
 
 /**
- * Sets the scope for the remainder of this execution rather than for a callback.
+ * A fallback account for code with no natural scope boundary to wrap — which in
+ * practice means tests, where there is no request and no job to run inside.
  *
- * Intended for tests and boot-time setup, where there is no natural function to
- * wrap. Request handling and background jobs should use `runInScope` /
- * `runInAccount` instead, so the scope cannot outlive the work it belongs to.
+ * `AsyncLocalStorage.enterWith()` was the obvious way to do this and is not
+ * reliable: a store installed during module evaluation does not propagate into
+ * test callbacks scheduled later, so the suite passed on Node 23 and failed on
+ * the Node 26 that CI and production actually run.
+ *
+ * Refused outside the test runner, so the guarantee that production code cannot
+ * read tenant data unscoped is not weakened by this existing.
  */
-export function enterAccountScope(accountId: string) {
-  storage.enterWith({ accountId, userId: null, viaSiteAdmin: false });
+let ambientAccountId: string | null = null;
+
+export function setAmbientAccount(accountId: string | null) {
+  if (!process.env.VITEST) {
+    throw new Error(
+      'setAmbientAccount() is a test-only helper. Production code must establish ' +
+        'an explicit scope with runInScope() or runInAccount().',
+    );
+  }
+  ambientAccountId = accountId;
 }
 
 /**
@@ -54,16 +67,15 @@ export function enterAccountScope(accountId: string) {
  */
 export function currentAccountId(): string {
   const scope = storage.getStore();
-  if (!scope) {
-    throw new Error(
-      'No account scope is active. Wrap this work in runInAccount()/runInScope() — ' +
-        'account-scoped data must never be read without knowing which tenant it belongs to.',
-    );
-  }
-  return scope.accountId;
+  if (scope) return scope.accountId;
+  if (ambientAccountId) return ambientAccountId;
+  throw new Error(
+    'No account scope is active. Wrap this work in runInAccount()/runInScope() — ' +
+      'account-scoped data must never be read without knowing which tenant it belongs to.',
+  );
 }
 
 /** The active account, or null when there is no scope. For optional reads only. */
 export function maybeAccountId(): string | null {
-  return storage.getStore()?.accountId ?? null;
+  return storage.getStore()?.accountId ?? ambientAccountId;
 }
