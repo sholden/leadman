@@ -18,24 +18,27 @@ const profileInput = z.object({
   active: z.boolean().optional(),
 });
 
-profilesRouter.get('/', (_req, res) => {
-  const rows = db.prepare('SELECT * FROM profiles ORDER BY created_at').all() as ProfileRow[];
+profilesRouter.get('/', (req, res) => {
+  const accountId = req.auth!.accountId;
+  const rows = db
+    .prepare('SELECT * FROM profiles WHERE account_id = ? ORDER BY created_at')
+    .all(accountId) as ProfileRow[];
   const counts = db
     .prepare(
       `SELECT profile_id,
               SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_sources,
               COUNT(*) AS total_sources
-       FROM sources GROUP BY profile_id`,
+       FROM sources WHERE account_id = ? GROUP BY profile_id`,
     )
-    .all() as { profile_id: string; active_sources: number; total_sources: number }[];
+    .all(accountId) as { profile_id: string; active_sources: number; total_sources: number }[];
   const projects = db
     .prepare(
       `SELECT profile_id,
               SUM(CASE WHEN status='discovered' THEN 1 ELSE 0 END) AS discovered,
               SUM(CASE WHEN status='tracked' THEN 1 ELSE 0 END) AS tracked
-       FROM projects GROUP BY profile_id`,
+       FROM projects WHERE account_id = ? GROUP BY profile_id`,
     )
-    .all() as { profile_id: string; discovered: number; tracked: number }[];
+    .all(accountId) as { profile_id: string; discovered: number; tracked: number }[];
 
   res.json(
     rows.map((p) => ({
@@ -61,10 +64,11 @@ profilesRouter.post('/', (req, res) => {
   const now = nowIso();
   db.prepare(
     `INSERT INTO profiles
-       (id, name, description, center_label, center_lat, center_lng, radius_miles, active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, account_id, name, description, center_label, center_lat, center_lng, radius_miles, active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
+    req.auth!.accountId,
     p.name,
     p.description,
     p.center_label,
@@ -81,9 +85,7 @@ profilesRouter.post('/', (req, res) => {
 profilesRouter.patch('/:id', (req, res) => {
   const parsed = profileInput.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const existing = db.prepare('SELECT * FROM profiles WHERE id = ?').get(req.params.id) as
-    | ProfileRow
-    | undefined;
+  const existing = findProfile(req.params.id, req.auth!.accountId);
   if (!existing) return res.status(404).json({ error: 'not found' });
 
   const p = { ...parsed.data };
@@ -105,15 +107,16 @@ profilesRouter.patch('/:id', (req, res) => {
 });
 
 profilesRouter.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM profiles WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM profiles WHERE id = ? AND account_id = ?').run(
+    req.params.id,
+    req.auth!.accountId,
+  );
   res.status(204).end();
 });
 
 /** Manually kick off source discovery for one profile. */
 profilesRouter.post('/:id/discover', async (req, res) => {
-  const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(req.params.id) as
-    | ProfileRow
-    | undefined;
+  const profile = findProfile(req.params.id, req.auth!.accountId);
   if (!profile) return res.status(404).json({ error: 'not found' });
 
   const outcome = await withRun(
@@ -125,9 +128,7 @@ profilesRouter.post('/:id/discover', async (req, res) => {
 
 /** Manually kick off a coverage assessment (which may trigger discovery). */
 profilesRouter.post('/:id/assess', async (req, res) => {
-  const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(req.params.id) as
-    | ProfileRow
-    | undefined;
+  const profile = findProfile(req.params.id, req.auth!.accountId);
   if (!profile) return res.status(404).json({ error: 'not found' });
 
   const outcome = await withRun(
@@ -136,3 +137,13 @@ profilesRouter.post('/:id/assess', async (req, res) => {
   );
   res.json(outcome);
 });
+
+/**
+ * Always looks a profile up with its account, so an id belonging to another
+ * tenant reads as "not found" rather than being fetched and then checked.
+ */
+function findProfile(id: string, accountId: string): ProfileRow | undefined {
+  return db.prepare('SELECT * FROM profiles WHERE id = ? AND account_id = ?').get(id, accountId) as
+    | ProfileRow
+    | undefined;
+}

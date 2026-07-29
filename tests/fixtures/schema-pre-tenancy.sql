@@ -1,3 +1,11 @@
+-- The database schema as it stood immediately before accounts were added,
+-- captured from commit f6ad63f ("Pin Node for local shells too, via mise.toml").
+--
+-- Vendored rather than read from git at test time: CI checks out shallow, so
+-- `git show` on a historical commit is not available there. This is a frozen
+-- snapshot by definition, so a copy cannot drift from what it documents.
+-- Do not edit. It describes the past, not the current schema.
+
 -- Leadman schema. All timestamps are ISO-8601 UTC strings.
 
 PRAGMA journal_mode = WAL;
@@ -12,119 +20,15 @@ CREATE TABLE IF NOT EXISTS leases (
   expires_at  TEXT NOT NULL
 );
 
--- ---------------------------------------------------------------------------
--- Identity and tenancy.
---
--- Identity is global and tenancy is a join table, rather than users living
--- inside an account. That way one email is one person: login is unambiguous
--- without an account picker, and the same address can belong to several firms
--- without colliding.
--- ---------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS accounts (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  slug       TEXT NOT NULL UNIQUE,
-  active     INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
--- `is_site_admin` operates the installation: it can list every account and
--- enter any of them. It is a flag rather than a separate user type so there is
--- exactly one login flow, one password path, and one session table.
-CREATE TABLE IF NOT EXISTS users (
-  id            TEXT PRIMARY KEY,
-  email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  password_hash TEXT NOT NULL,
-  name          TEXT NOT NULL DEFAULT '',
-  is_site_admin INTEGER NOT NULL DEFAULT 0,
-  active        INTEGER NOT NULL DEFAULT 1,
-  last_login_at TEXT,
-  created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
-);
-
--- Which accounts a user may act in, and with what authority.
--- role: owner|member. Owners manage membership and invites; the last owner of
--- an account cannot be demoted or removed, so an account is never stranded.
-CREATE TABLE IF NOT EXISTS memberships (
-  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  role       TEXT NOT NULL DEFAULT 'member',
-  invited_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (user_id, account_id)
-);
-CREATE INDEX IF NOT EXISTS idx_memberships_account ON memberships (account_id, role);
-
--- Nothing in this app sends email, so an invite is a token an owner copies and
--- delivers out of band. Bound to an address so a leaked link is not by itself
--- enough to join: the redeemer must authenticate as that email.
-CREATE TABLE IF NOT EXISTS invites (
-  id          TEXT PRIMARY KEY,
-  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  email       TEXT NOT NULL COLLATE NOCASE,
-  role        TEXT NOT NULL DEFAULT 'member',
-  token_hash  TEXT NOT NULL UNIQUE,
-  invited_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
-  expires_at  TEXT NOT NULL,
-  accepted_at TEXT,
-  accepted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-  revoked_at  TEXT,
-  created_at  TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_invites_account ON invites (account_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_invites_email ON invites (email);
-
--- Opaque bearer tokens in an httpOnly cookie. Only the hash is stored, so a
--- database leak does not hand over live sessions. `active_account_id` is the
--- account the session is currently acting in — this is how both multi-account
--- members and site admins move between tenants.
-CREATE TABLE IF NOT EXISTS sessions (
-  id                TEXT PRIMARY KEY,
-  token_hash        TEXT NOT NULL UNIQUE,
-  user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  active_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
-  user_agent        TEXT NOT NULL DEFAULT '',
-  created_at        TEXT NOT NULL,
-  last_seen_at      TEXT NOT NULL,
-  expires_at        TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at);
-
--- A site admin entering an account it is not a member of is a deliberate,
--- recorded act rather than a silent capability.
-CREATE TABLE IF NOT EXISTS admin_access_log (
-  id         TEXT PRIMARY KEY,
-  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  at         TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_admin_access_at ON admin_access_log (at DESC);
-
--- Operator-level configuration, shared by the whole installation. Distinct from
--- `settings`, which is per-account. The installation-wide spend ceiling lives
--- here because every account bills to the same provider API key.
-CREATE TABLE IF NOT EXISTS site_settings (
+CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
-);
-
--- Per-account configuration: model, effort, budget caps, scan cadence.
-CREATE TABLE IF NOT EXISTS settings (
-  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  key        TEXT NOT NULL,
-  value      TEXT NOT NULL,
-  PRIMARY KEY (account_id, key)
 );
 
 -- A "search profile" is one standing description of the work the firm wants,
 -- plus the geography to look in.
 CREATE TABLE IF NOT EXISTS profiles (
   id             TEXT PRIMARY KEY,
-  account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   name           TEXT NOT NULL,
   description    TEXT NOT NULL,
   center_label   TEXT NOT NULL,
@@ -146,7 +50,6 @@ CREATE TABLE IF NOT EXISTS profiles (
 -- sources and what counts as a lead.
 CREATE TABLE IF NOT EXISTS work_types (
   id           TEXT PRIMARY KEY,
-  account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   profile_id   TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   key          TEXT NOT NULL,          -- stable slug the model references, e.g. "school-roofing"
   name         TEXT NOT NULL,
@@ -168,7 +71,6 @@ CREATE INDEX IF NOT EXISTS idx_work_types_profile ON work_types (profile_id, act
 -- Where leads come from: agenda pages, RFP portals, bid boards, permit feeds, news.
 CREATE TABLE IF NOT EXISTS sources (
   id            TEXT PRIMARY KEY,
-  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   profile_id    TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   name          TEXT NOT NULL,
   url           TEXT NOT NULL,
@@ -206,9 +108,6 @@ CREATE INDEX IF NOT EXISTS idx_swt_work_type ON source_work_types (work_type_id)
 -- resolve cleanly on a fresh database.
 CREATE TABLE IF NOT EXISTS runs (
   id          TEXT PRIMARY KEY,
-  -- Set for every run. A scheduler tick spans one account at a time rather than
-  -- the whole installation, so spend is always attributable to a tenant.
-  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   profile_id  TEXT REFERENCES profiles(id) ON DELETE CASCADE,
   kind        TEXT NOT NULL,  -- tick|discovery|assessment|scan|research
   trigger     TEXT NOT NULL DEFAULT 'schedule', -- schedule|manual
@@ -248,7 +147,6 @@ CREATE INDEX IF NOT EXISTS idx_source_scans_source ON source_scans (source_id, s
 -- The thing we actually care about.
 CREATE TABLE IF NOT EXISTS projects (
   id            TEXT PRIMARY KEY,
-  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   profile_id    TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   work_type_id  TEXT REFERENCES work_types(id) ON DELETE SET NULL,
   name          TEXT NOT NULL,
@@ -293,12 +191,9 @@ CREATE TABLE IF NOT EXISTS project_sources (
 );
 CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources (project_id);
 
--- Archived copy of every document we based a finding on. Carries account_id of
--- its own because the API addresses artifacts directly by id, so there is not
--- always a parent row in hand to scope the lookup through.
+-- Archived copy of every document we based a finding on.
 CREATE TABLE IF NOT EXISTS artifacts (
   id                TEXT PRIMARY KEY,
-  account_id        TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   project_id        TEXT REFERENCES projects(id) ON DELETE CASCADE,
   project_source_id TEXT REFERENCES project_sources(id) ON DELETE SET NULL,
   source_id         TEXT REFERENCES sources(id) ON DELETE SET NULL,
@@ -363,7 +258,6 @@ CREATE INDEX IF NOT EXISTS idx_run_events_at ON run_events (at DESC);
 -- Every model call, for the budget guard and the spend display.
 CREATE TABLE IF NOT EXISTS usage_ledger (
   id                  TEXT PRIMARY KEY,
-  account_id          TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   run_id              TEXT REFERENCES runs(id) ON DELETE SET NULL,
   purpose             TEXT NOT NULL DEFAULT '',
   model               TEXT NOT NULL,

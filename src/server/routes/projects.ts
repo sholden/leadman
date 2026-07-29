@@ -9,8 +9,8 @@ export const projectsRouter = Router();
 
 projectsRouter.get('/', (req, res) => {
   const { profileId, status, q, workTypeId } = req.query as Record<string, string | undefined>;
-  const clauses: string[] = [];
-  const params: unknown[] = [];
+  const clauses: string[] = ['p.account_id = ?'];
+  const params: unknown[] = [req.auth!.accountId];
   if (profileId) {
     clauses.push('p.profile_id = ?');
     params.push(profileId);
@@ -31,7 +31,7 @@ projectsRouter.get('/', (req, res) => {
     clauses.push('(p.name LIKE ? OR p.summary LIKE ? OR p.jurisdiction LIKE ?)');
     params.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const where = `WHERE ${clauses.join(' AND ')}`;
 
   const rows = db
     .prepare(
@@ -53,9 +53,10 @@ projectsRouter.get('/:id', (req, res) => {
   const project = db
     .prepare(
       `SELECT p.*, wt.name AS work_type_name, wt.key AS work_type_key
-       FROM projects p LEFT JOIN work_types wt ON wt.id = p.work_type_id WHERE p.id = ?`,
+       FROM projects p LEFT JOIN work_types wt ON wt.id = p.work_type_id
+       WHERE p.id = ? AND p.account_id = ?`,
     )
-    .get(req.params.id) as ProjectRow | undefined;
+    .get(req.params.id, req.auth!.accountId) as ProjectRow | undefined;
   if (!project) return res.status(404).json({ error: 'not found' });
 
   const workTypes = db
@@ -113,12 +114,18 @@ const patchInput = z.object({
 projectsRouter.patch('/:id', (req, res) => {
   const parsed = patchInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id) as
-    | ProjectRow
-    | undefined;
+  const existing = findProject(req.params.id, req.auth!.accountId);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const p = parsed.data;
   const now = nowIso();
+
+  // A work type from another account (or another profile) must not be attachable.
+  if (p.work_type_id) {
+    const owned = db
+      .prepare('SELECT 1 FROM work_types WHERE id = ? AND account_id = ? AND profile_id = ?')
+      .get(p.work_type_id, req.auth!.accountId, existing.profile_id);
+    if (!owned) return res.status(400).json({ error: 'No such work type on this profile.' });
+  }
 
   const becomingTracked = p.status === 'tracked' && existing.status !== 'tracked';
 
@@ -149,15 +156,16 @@ projectsRouter.patch('/:id', (req, res) => {
 });
 
 projectsRouter.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM projects WHERE id = ? AND account_id = ?').run(
+    req.params.id,
+    req.auth!.accountId,
+  );
   res.status(204).end();
 });
 
 /** Research one project right now. */
 projectsRouter.post('/:id/research', async (req, res) => {
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id) as
-    | ProjectRow
-    | undefined;
+  const project = findProject(req.params.id, req.auth!.accountId);
   if (!project) return res.status(404).json({ error: 'not found' });
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(project.profile_id) as
     | ProfileRow
@@ -171,9 +179,22 @@ projectsRouter.post('/:id/research', async (req, res) => {
   res.json(outcome);
 });
 
-/** Full archived text of one stored document. */
+/**
+ * Full archived text of one stored document. Artifacts are addressed directly
+ * by id with no parent in the URL, which is exactly why they carry their own
+ * account_id rather than being scoped through a join.
+ */
 projectsRouter.get('/artifacts/:artifactId', (req, res) => {
-  const artifact = db.prepare('SELECT * FROM artifacts WHERE id = ?').get(req.params.artifactId);
+  const artifact = db
+    .prepare('SELECT * FROM artifacts WHERE id = ? AND account_id = ?')
+    .get(req.params.artifactId, req.auth!.accountId);
   if (!artifact) return res.status(404).json({ error: 'not found' });
   res.json(artifact);
 });
+
+/** Scoped lookup, so another tenant's id is indistinguishable from a missing one. */
+function findProject(id: string, accountId: string): ProjectRow | undefined {
+  return db.prepare('SELECT * FROM projects WHERE id = ? AND account_id = ?').get(id, accountId) as
+    | ProjectRow
+    | undefined;
+}

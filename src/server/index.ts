@@ -1,13 +1,19 @@
 import { config, shadowedEnvVars } from './config.js';
 import { migrate } from './db/index.js';
-import { credentialStatus, verifyCredentials } from './ai/credentials.js';
+import { credentialSummary, verifyCredentials } from './ai/credentials.js';
 import { createApp } from './app.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { reconcileOrphanedRuns } from './jobs/runs.js';
+import { bootstrapSiteAdmin } from './auth/bootstrap.js';
+import { purgeExpiredSessions } from './auth/store.js';
 
 migrate();
 // A run left 'running' by a crash would otherwise show as active forever.
 reconcileOrphanedRuns();
+purgeExpiredSessions();
+// Must finish before the port opens: an installation with no site admin has no
+// way in, and the health endpoint reports on it.
+await bootstrapSiteAdmin();
 
 const app = createApp();
 
@@ -23,9 +29,17 @@ const server = app.listen(config.port, async () => {
   }
 
   await verifyCredentials();
-  const { state, detail } = credentialStatus();
-  if (state === 'ok') console.log('  API key verified.\n');
-  else console.warn(`  WARNING: ${detail}\n  Discovery, scanning, and research will fail.\n`);
+  // Report every vendor, since different accounts may be on different ones.
+  const configured = credentialSummary().providers.filter((p) => p.configured);
+  if (configured.length === 0) {
+    console.warn('  WARNING: no provider API key is set.\n  Discovery, scanning, and research will fail.\n');
+  } else {
+    for (const p of configured) {
+      if (p.state === 'ok') console.log(`  ${p.provider} API key verified.`);
+      else console.warn(`  WARNING: ${p.provider} — ${p.detail}`);
+    }
+    console.log('');
+  }
 
   if (config.schedulerEnabled) startScheduler();
   else console.log('  Scheduler disabled (LEADMAN_SCHEDULER=off)\n');

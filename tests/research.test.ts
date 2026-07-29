@@ -3,10 +3,11 @@ import { db, migrate } from '../src/server/db/index.js';
 import { applyResearch } from '../src/server/jobs/researchProject.js';
 import type { ResearchResult } from '../src/server/ai/schemas.js';
 import type { ProjectRow } from '../src/server/lib/models.js';
-import { fakeCtx, makeProfile, resetData } from './helpers.js';
+import { fakeCtx, makeProfile, resetData, useAccount } from './helpers.js';
 import { newId, nowIso } from '../src/server/db/index.js';
 
 migrate();
+const accountId = useAccount();
 
 vi.mock('../src/server/lib/archive.js', () => ({
   archiveUrl: async () => 'stub-artifact-id',
@@ -17,9 +18,9 @@ function makeProject(profileId: string): ProjectRow {
   const id = newId();
   const now = nowIso();
   db.prepare(
-    `INSERT INTO projects (id, profile_id, name, status, first_seen_at, last_updated_at)
-     VALUES (?, ?, 'Test Library', 'tracked', ?, ?)`,
-  ).run(id, profileId, now, now);
+    `INSERT INTO projects (id, account_id, profile_id, name, status, first_seen_at, last_updated_at)
+     VALUES (?, ?, ?, 'Test Library', 'tracked', ?, ?)`,
+  ).run(id, accountId, profileId, now, now);
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow;
 }
 

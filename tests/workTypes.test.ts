@@ -9,9 +9,10 @@ import {
   coverageByWorkType,
   leastCoveredWorkType,
 } from '../src/server/jobs/workTypes.js';
-import { makeProfile, makeSource, makeWorkType, resetData } from './helpers.js';
+import { makeProfile, makeSource, makeWorkType, resetData, useAccount } from './helpers.js';
 
 migrate();
+const accountId = useAccount();
 
 beforeEach(() => resetData());
 
@@ -130,9 +131,9 @@ describe('coverage', () => {
     const now = nowIso();
     for (const status of ['discovered', 'tracked', 'rejected']) {
       db.prepare(
-        `INSERT INTO projects (id, profile_id, work_type_id, name, status, first_seen_at, last_updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(newId(), p.id, wt.id, `x-${status}`, status, now, now);
+        `INSERT INTO projects (id, account_id, profile_id, work_type_id, name, status, first_seen_at, last_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(newId(), accountId, p.id, wt.id, `x-${status}`, status, now, now);
     }
     expect(coverageByWorkType(p.id)[0].projectsFound).toBe(2);
   });

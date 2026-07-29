@@ -90,6 +90,11 @@ jobs:
           # ship so switching providers does not need a redeploy.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Creates the first site administrator on the first boot that has
+          # accounts. Kamal fails the deploy if a referenced secret is unset, so
+          # these must exist as repository secrets before that deploy runs.
+          LEADMAN_ADMIN_EMAIL: ${{ secrets.LEADMAN_ADMIN_EMAIL }}
+          LEADMAN_ADMIN_PASSWORD: ${{ secrets.LEADMAN_ADMIN_PASSWORD }}
         run: kamal deploy
 
       # A cancelled or crashed run can leave the deploy lock held on the host,
@@ -101,6 +106,8 @@ jobs:
           KAMAL_REGISTRY_PASSWORD: ${{ secrets.KAMAL_REGISTRY_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LEADMAN_ADMIN_EMAIL: ${{ secrets.LEADMAN_ADMIN_EMAIL }}
+          LEADMAN_ADMIN_PASSWORD: ${{ secrets.LEADMAN_ADMIN_PASSWORD }}
         run: kamal lock release
 
       # Kamal's proxy healthcheck already gated the cutover from inside the

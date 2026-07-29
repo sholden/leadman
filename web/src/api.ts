@@ -188,6 +188,11 @@ export interface Budget {
   remainingUsd: number;
   perRunCapUsd: number;
   exhausted: boolean;
+  /** True when the installation-wide ceiling is what stopped work. */
+  installationExhausted?: boolean;
+  /** Site admins only — the aggregate is not a tenant's business. */
+  installationCapUsd?: number;
+  installationMonthToDateUsd?: number;
   daily?: { day: string; cost: number; calls: number }[];
   byPurpose?: { purpose: string; cost: number; calls: number }[];
 }
@@ -211,12 +216,74 @@ export interface Dashboard {
   };
 }
 
+export type Role = 'owner' | 'member';
+
+export interface AccountSummary {
+  id: string;
+  name: string;
+  slug: string;
+  /** Null when a site admin can reach the account without being a member. */
+  role: Role | null;
+}
+
+export interface Session {
+  user: { id: string; email: string; name: string; isSiteAdmin: boolean };
+  accountId: string | null;
+  account: AccountSummary | null;
+  role: Role | null;
+  accounts: AccountSummary[];
+}
+
+export interface Member {
+  id: string;
+  email: string;
+  name: string;
+  is_site_admin: number;
+  active: number;
+  last_login_at: string | null;
+  role: Role;
+  joined_at: string;
+}
+
+export interface Invite {
+  id: string;
+  email: string;
+  role: Role;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  invited_by_email: string | null;
+}
+
+/** Thrown for a 401 so the shell can drop to the login screen from anywhere. */
+export class NotAuthenticatedError extends Error {
+  constructor() {
+    super('Your session has ended. Please sign in again.');
+    this.name = 'NotAuthenticatedError';
+  }
+}
+
+/** Notified whenever a request comes back 401, so the app can react once. */
+const authListeners = new Set<() => void>();
+export function onAuthLost(fn: () => void) {
+  authListeners.add(fn);
+  return () => authListeners.delete(fn);
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
+    // The session lives in an httpOnly cookie; without this the dev server on a
+    // different port would never send it.
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      for (const fn of authListeners) fn();
+      throw new NotAuthenticatedError();
+    }
     let message = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
@@ -230,6 +297,87 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // ---- auth
+  me: () => req<Session>('/auth/me'),
+  login: (email: string, password: string) =>
+    req<Session>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout: () => req<void>('/auth/logout', { method: 'POST' }),
+  switchAccount: (accountId: string) =>
+    req<Session>('/auth/switch-account', { method: 'POST', body: JSON.stringify({ accountId }) }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    req<void>('/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  invitePreview: (token: string) =>
+    req<{ email: string; role: Role; accountName: string; userExists: boolean }>(
+      `/auth/invite/${token}`,
+    ),
+  acceptInvite: (token: string, password: string, name?: string) =>
+    req<Session>(`/auth/invite/${token}/accept`, {
+      method: 'POST',
+      body: JSON.stringify({ password, name }),
+    }),
+
+  // ---- the active account
+  account: () => req<{ account: AccountSummary; role: Role | null; viaSiteAdmin: boolean }>('/account'),
+  renameAccount: (name: string) =>
+    req<AccountSummary>('/account', { method: 'PATCH', body: JSON.stringify({ name }) }),
+  members: () => req<Member[]>('/account/members'),
+  setMemberRole: (userId: string, role: Role) =>
+    req<Member[]>(`/account/members/${userId}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  removeMember: (userId: string) => req<void>(`/account/members/${userId}`, { method: 'DELETE' }),
+  invites: () => req<Invite[]>('/account/invites'),
+  createInvite: (email: string, role: Role) =>
+    req<{ id: string; email: string; role: Role; expires_at: string; url: string }>(
+      '/account/invites',
+      { method: 'POST', body: JSON.stringify({ email, role }) },
+    ),
+  revokeInvite: (id: string) => req<void>(`/account/invites/${id}`, { method: 'DELETE' }),
+
+  // ---- installation administration
+  adminAccounts: () =>
+    req<
+      (AccountSummary & {
+        active: number;
+        created_at: string;
+        member_count: number;
+        profile_count: number;
+        project_count: number;
+        monthToDateUsd: number;
+      })[]
+    >('/admin/accounts'),
+  createAccount: (name: string, ownerEmail?: string) =>
+    req<{ account: AccountSummary; invite: { email: string; url: string } | null; ownerAdded?: string }>(
+      '/admin/accounts',
+      { method: 'POST', body: JSON.stringify({ name, ownerEmail: ownerEmail || undefined }) },
+    ),
+  updateAccount: (id: string, body: { name?: string; active?: boolean }) =>
+    req<AccountSummary>(`/admin/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  siteSettings: () =>
+    req<{ settings: Record<string, string>; defaults: Record<string, string>; monthToDateUsd: number }>(
+      '/admin/site-settings',
+    ),
+  saveSiteSettings: (body: Record<string, string>) =>
+    req<{ settings: Record<string, string> }>('/admin/site-settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  adminUsers: () =>
+    req<
+      {
+        id: string;
+        email: string;
+        name: string;
+        is_site_admin: number;
+        active: number;
+        last_login_at: string | null;
+        accounts: { account_id: string; account_name: string; role: Role }[];
+      }[]
+    >('/admin/users'),
+  updateUser: (id: string, body: { active?: boolean; isSiteAdmin?: boolean }) =>
+    req<unknown>(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
   dashboard: (profileId?: string) =>
     req<Dashboard>(`/dashboard${profileId ? `?profileId=${profileId}` : ''}`),
 

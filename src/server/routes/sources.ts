@@ -13,8 +13,8 @@ export const sourcesRouter = Router();
 sourcesRouter.get('/', (req, res) => {
   const profileId = String(req.query.profileId ?? '');
   const status = String(req.query.status ?? '');
-  const clauses: string[] = [];
-  const params: unknown[] = [];
+  const clauses: string[] = ['account_id = ?'];
+  const params: unknown[] = [req.auth!.accountId];
   if (profileId) {
     clauses.push('profile_id = ?');
     params.push(profileId);
@@ -23,7 +23,7 @@ sourcesRouter.get('/', (req, res) => {
     clauses.push('status = ?');
     params.push(status);
   }
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const where = `WHERE ${clauses.join(' AND ')}`;
   const rows = db
     .prepare(`SELECT * FROM sources ${where} ORDER BY status, score DESC, name`)
     .all(...params) as SourceRow[];
@@ -31,7 +31,7 @@ sourcesRouter.get('/', (req, res) => {
 });
 
 sourcesRouter.get('/:id', (req, res) => {
-  const source = db.prepare('SELECT * FROM sources WHERE id = ?').get(req.params.id);
+  const source = findSource(req.params.id, req.auth!.accountId);
   if (!source) return res.status(404).json({ error: 'not found' });
   const scans = db
     .prepare('SELECT * FROM source_scans WHERE source_id = ? ORDER BY started_at DESC LIMIT 25')
@@ -52,16 +52,25 @@ sourcesRouter.post('/', (req, res) => {
   const parsed = sourceInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const s = parsed.data;
+  const accountId = req.auth!.accountId;
+  // The profile is named in the body, so it has to be proven to belong to this
+  // account — otherwise a source could be attached to another tenant's profile.
+  const owns = db
+    .prepare('SELECT 1 FROM profiles WHERE id = ? AND account_id = ?')
+    .get(s.profile_id, accountId);
+  if (!owns) return res.status(404).json({ error: 'No such profile.' });
+
   const id = newId();
   const now = nowIso();
   try {
     db.prepare(
       `INSERT INTO sources
-         (id, profile_id, name, url, kind, jurisdiction, description, discovery_reason,
+         (id, account_id, profile_id, name, url, kind, jurisdiction, description, discovery_reason,
           status, origin, score, next_scan_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'added by user', 'active', 'manual', 70, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added by user', 'active', 'manual', 70, ?, ?, ?)`,
     ).run(
       id,
+      accountId,
       s.profile_id,
       s.name,
       normalizeUrl(s.url),
@@ -91,9 +100,7 @@ const patchInput = z.object({
 sourcesRouter.patch('/:id', (req, res) => {
   const parsed = patchInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const existing = db.prepare('SELECT * FROM sources WHERE id = ?').get(req.params.id) as
-    | SourceRow
-    | undefined;
+  const existing = findSource(req.params.id, req.auth!.accountId);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const p = parsed.data;
 
@@ -117,20 +124,29 @@ sourcesRouter.patch('/:id', (req, res) => {
     nowIso(),
     req.params.id,
   );
-  if (p.work_type_ids) linkSourceWorkTypes(req.params.id, p.work_type_ids);
+  if (p.work_type_ids) {
+    // Only work types from this account may be linked.
+    const owned = db
+      .prepare(
+        `SELECT id FROM work_types WHERE account_id = ? AND id IN (${p.work_type_ids.map(() => '?').join(',') || "''"})`,
+      )
+      .all(req.auth!.accountId, ...p.work_type_ids) as { id: string }[];
+    linkSourceWorkTypes(req.params.id, owned.map((w) => w.id));
+  }
   res.json(db.prepare('SELECT * FROM sources WHERE id = ?').get(req.params.id));
 });
 
 sourcesRouter.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM sources WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM sources WHERE id = ? AND account_id = ?').run(
+    req.params.id,
+    req.auth!.accountId,
+  );
   res.status(204).end();
 });
 
 /** Scan one source right now. */
 sourcesRouter.post('/:id/scan', async (req, res) => {
-  const source = db.prepare('SELECT * FROM sources WHERE id = ?').get(req.params.id) as
-    | SourceRow
-    | undefined;
+  const source = findSource(req.params.id, req.auth!.accountId);
   if (!source) return res.status(404).json({ error: 'not found' });
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(source.profile_id) as
     | ProfileRow
@@ -143,3 +159,10 @@ sourcesRouter.post('/:id/scan', async (req, res) => {
   );
   res.json(outcome);
 });
+
+/** Scoped lookup, so another tenant's id is indistinguishable from a missing one. */
+function findSource(id: string, accountId: string): SourceRow | undefined {
+  return db.prepare('SELECT * FROM sources WHERE id = ? AND account_id = ?').get(id, accountId) as
+    | SourceRow
+    | undefined;
+}

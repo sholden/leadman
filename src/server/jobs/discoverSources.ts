@@ -156,9 +156,9 @@ export async function discoverSources(
   const seen = new Set(existing.map((s) => normalizeUrl(s.url)));
   const insert = db.prepare(
     `INSERT INTO sources
-       (id, profile_id, name, url, kind, jurisdiction, description, discovery_reason,
+       (id, account_id, profile_id, name, url, kind, jurisdiction, description, discovery_reason,
         status, origin, score, next_scan_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?, ?, ?)
      ON CONFLICT (profile_id, url) DO NOTHING`,
   );
 
@@ -183,6 +183,7 @@ export async function discoverSources(
     const id = newId();
     const info = insert.run(
       id,
+      ctx.accountId,
       profile.id,
       s.name.slice(0, 200),
       url,

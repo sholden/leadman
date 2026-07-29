@@ -3,8 +3,10 @@ import { db, migrate, getSetting, getNumberSetting, setSetting, allSettings } fr
 import { DEFAULT_SETTINGS } from '../src/server/config.js';
 import { reconcileOrphanedRuns } from '../src/server/jobs/runs.js';
 import { newId, nowIso } from '../src/server/db/index.js';
+import { useAccount } from './helpers.js';
 
 migrate();
+const accountId = useAccount();
 
 describe('migration', () => {
   it('is idempotent — running it again is a no-op', () => {
@@ -79,8 +81,8 @@ describe('orphaned runs', () => {
   it('marks runs left mid-flight by a restart, so nothing shows as active forever', () => {
     const id = newId();
     db.prepare(
-      "INSERT INTO runs (id, kind, status, started_at) VALUES (?, 'scan', 'running', ?)",
-    ).run(id, nowIso());
+      "INSERT INTO runs (id, account_id, kind, status, started_at) VALUES (?, ?, 'scan', 'running', ?)",
+    ).run(id, accountId, nowIso());
 
     reconcileOrphanedRuns();
 
@@ -97,8 +99,8 @@ describe('orphaned runs', () => {
   it('leaves finished runs alone', () => {
     const id = newId();
     db.prepare(
-      "INSERT INTO runs (id, kind, status, started_at, finished_at) VALUES (?, 'scan', 'ok', ?, ?)",
-    ).run(id, nowIso(), nowIso());
+      "INSERT INTO runs (id, account_id, kind, status, started_at, finished_at) VALUES (?, ?, 'scan', 'ok', ?, ?)",
+    ).run(id, accountId, nowIso(), nowIso());
     reconcileOrphanedRuns();
     const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as { status: string };
     expect(run.status).toBe('ok');
